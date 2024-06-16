@@ -183,7 +183,7 @@ pub const ByteBuffer = struct {
     /// no allocations are made and the internal cursor is advanced
     /// by 2 bytes.
     pub fn getI16BigEndian(self: *Self) ?i16 {
-        return self.getInt(i16, std.builtin.Endian.Big);
+        return self.getInt(i16, std.builtin.Endian.big);
     }
 
     /// read a signed big-endian 32-bit number out of the ByteBuffer
@@ -192,7 +192,7 @@ pub const ByteBuffer = struct {
     /// no allocations are made and the internal cursor is advanced
     /// by 4 bytes.
     pub fn getI32BigEndian(self: *Self) ?i32 {
-        return self.getInt(i32, std.builtin.Endian.Big);
+        return self.getInt(i32, std.builtin.Endian.big);
     }
 
     /// read a signed big-endian 64-bit number out of the ByteBuffer
@@ -201,7 +201,7 @@ pub const ByteBuffer = struct {
     /// no allocations are made and the internal cursor is advanced
     /// by 8 bytes.
     pub fn getI64BigEndian(self: *Self) ?i64 {
-        return self.getInt(i64, std.builtin.Endian.Big);
+        return self.getInt(i64, std.builtin.Endian.big);
     }
 
     /// read a signed little-endian 16-bit number out of the ByteBuffer
@@ -210,7 +210,7 @@ pub const ByteBuffer = struct {
     /// no allocations are made and the internal cursor is advanced
     /// by 2 bytes.
     pub fn getI16LittlEndian(self: *Self) ?i16 {
-        return self.getInt(i16, std.builtin.Endian.Little);
+        return self.getInt(i16, std.builtin.Endian.little);
     }
 
     /// read a signed little-endian 32-bit number out of the ByteBuffer
@@ -219,7 +219,7 @@ pub const ByteBuffer = struct {
     /// no allocations are made and the internal cursor is advanced
     /// by 4 bytes.
     pub fn getI32LittlEndian(self: *Self) ?i32 {
-        return self.getInt(i32, std.builtin.Endian.Little);
+        return self.getInt(i32, std.builtin.Endian.little);
     }
 
     /// read a signed little-endian 64-bit number out of the ByteBuffer
@@ -228,7 +228,7 @@ pub const ByteBuffer = struct {
     /// no allocations are made and the internal cursor is advanced
     /// by 8 bytes.
     pub fn getI64LittlEndian(self: *Self) ?i64 {
-        return self.getInt(i64, std.builtin.Endian.Little);
+        return self.getInt(i64, std.builtin.Endian.little);
     }
 
     inline fn validateLenGreaterThanOrEqualTo(self: *Self, expected: usize) ?void {

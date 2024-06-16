@@ -14,5 +14,5 @@ pub fn errorHandlingPlaceholder(msg: []const u8) noreturn {
 }
 
 test {
-    std.testing.refAllDecls(@This());
+    std.testing.refAllDeclsRecursive(@This());
 }
