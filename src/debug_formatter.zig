@@ -42,7 +42,7 @@ pub const DebugFormatter = struct {
                 }
                 break :blk ctx.buffer;
             },
-            .NoReturn => "type: no_return", // void
+            .NoReturn => unreachable,
             .Int => "type: int", // Int
             .Float => "type: float", // Float
             .Pointer => "type: pointer", // Pointer
