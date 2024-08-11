@@ -30,7 +30,10 @@ pub const DebugFormatter = struct {
                 try ctx.buffer.appendSlice(@typeName(t));
                 break :blk ctx.buffer;
             },
-            .Void => "void", // void
+            .Void => blk: {
+                try ctx.buffer.appendSlice("void");
+                break :blk ctx.buffer;
+            },
             .Bool => "type: bool", // void
             .NoReturn => "type: no_return", // void
             .Int => "type: int", // Int
@@ -73,6 +76,14 @@ test "expect DebugFormatter to work with types" {
 
     output = try DebugFormatter.sprintf(std.testing.allocator, struct_type);
     std.debug.assert(std.mem.eql(u8, output.items, "debug_formatter.test.expect DebugFormatter to work with types.MyStruct"));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with void" {
+    const void_value: void = undefined;
+
+    var output = try DebugFormatter.sprintf(std.testing.allocator, void_value);
+    std.debug.assert(std.mem.eql(u8, output.items, "void"));
     output.deinit();
 }
 
