@@ -43,7 +43,12 @@ pub const DebugFormatter = struct {
                 break :blk ctx.buffer;
             },
             .NoReturn => unreachable,
-            .Int => "type: int", // Int
+            .Int => blk: {
+                var buf: [256]u8 = undefined;
+                const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
+                try ctx.buffer.appendSlice(actual_buf);
+                break :blk ctx.buffer;
+            },
             .Float => "type: float", // Float
             .Pointer => "type: pointer", // Pointer
             .Array => "type: array", // Array
@@ -101,6 +106,23 @@ test "expect DebugFormatter to work with bools" {
 
     output = try DebugFormatter.sprintf(std.testing.allocator, false);
     std.debug.assert(std.mem.eql(u8, output.items, "false"));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with ints" {
+    const u: u32 = 42;
+    var output = try DebugFormatter.sprintf(std.testing.allocator, u);
+    std.debug.assert(std.mem.eql(u8, output.items, "42"));
+    output.deinit();
+
+    const i: i32 = -73;
+    output = try DebugFormatter.sprintf(std.testing.allocator, i);
+    std.debug.assert(std.mem.eql(u8, output.items, "-73"));
+    output.deinit();
+
+    const uu: u64 = 2890409822222;
+    output = try DebugFormatter.sprintf(std.testing.allocator, uu);
+    std.debug.assert(std.mem.eql(u8, output.items, "2890409822222"));
     output.deinit();
 }
 
