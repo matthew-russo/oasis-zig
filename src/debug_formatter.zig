@@ -20,55 +20,59 @@ pub const DebugFormatter = struct {
             .indentation = 0,
             .buffer = std.ArrayList(u8).init(allocator),
         };
-        return Self.sprintfWithContext(&ctx, t);
+        try Self.sprintfWithContext(&ctx, t);
+        return ctx.buffer;
     }
 
-    pub fn sprintfWithContext(ctx: *FormatContext, t: anytype) !std.ArrayList(u8) {
+    pub fn sprintfWithContext(ctx: *FormatContext, t: anytype) !void {
         const type_info = @typeInfo(@TypeOf(t));
-        return switch (type_info) {
-            .Type => blk: {
+        switch (type_info) {
+            .Type => {
                 try ctx.buffer.appendSlice(@typeName(t));
-                break :blk ctx.buffer;
             },
-            .Void => blk: {
+            .Void => {
                 try ctx.buffer.appendSlice("void");
-                break :blk ctx.buffer;
             },
-            .Bool => blk: {
+            .Bool => {
                 if (t) {
                     try ctx.buffer.appendSlice("true");
                 } else {
                     try ctx.buffer.appendSlice("false");
                 }
-                break :blk ctx.buffer;
             },
             .NoReturn => unreachable,
-            .Int => blk: {
+            .Int => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
                 try ctx.buffer.appendSlice(actual_buf);
-                break :blk ctx.buffer;
             },
-            .Float => blk: {
+            .Float => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
                 try ctx.buffer.appendSlice(actual_buf);
-                break :blk ctx.buffer;
             },
             .Pointer => "type: pointer", // Pointer
             .Array => "type: array", // Array
-            .Struct => "type: struct", // Struct
-            .ComptimeFloat => blk: {
-                var buf: [256]u8 = undefined;
-                const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
-                try ctx.buffer.appendSlice(actual_buf);
-                break :blk ctx.buffer;
+            .Struct => |struc| {
+                try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
+                try ctx.buffer.appendSlice(" { ");
+                inline for (struc.fields) |field| {
+                    try ctx.buffer.appendSlice(field.name);
+                    try ctx.buffer.appendSlice(": ");
+                    try Self.sprintfWithContext(ctx, @field(t, field.name));
+                    try ctx.buffer.appendSlice(", ");
+                }
+                try ctx.buffer.appendSlice("}");
             },
-            .ComptimeInt => blk: {
+            .ComptimeFloat => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
                 try ctx.buffer.appendSlice(actual_buf);
-                break :blk ctx.buffer;
+            },
+            .ComptimeInt => {
+                var buf: [256]u8 = undefined;
+                const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
+                try ctx.buffer.appendSlice(actual_buf);
             },
             .Undefined => unreachable,
             .Null => unreachable,
@@ -83,7 +87,7 @@ pub const DebugFormatter = struct {
             .AnyFrame => "TODO: type: any_frame", // AnyFrame
             .Vector => "TODO: type: vector", // Vector
             .EnumLiteral => "TODO: type: enum_literal", // void
-        };
+        }
     }
 };
 
@@ -186,21 +190,52 @@ test "expect DebugFormatter to work with comptime floats" {
     output.deinit();
 }
 
-// test "expect DebugFormatter to work with structs" {
-//     const MyStruct = struct {
-//         a: u8,
-//         b: u64,
-//         c: bool,
-//     };
-//
-//     const my_struct = MyStruct{
-//         .a = 42,
-//         .b = 2934092390498,
-//         .c = true,
-//     };
-//
-//     const output = DebugFormatter.debugSprintf(std.testing.allocator, my_struct);
-//
-//     std.debug.print("\n\nhelloworld: {s}\n\n", .{output});
-//     std.debug.assert(std.mem.eql(u8, output, "MyStruct { a: 42, b: 2934092390498, c: true }"));
-// }
+test "expect DebugFormatter to work with basic structs" {
+    const MyStruct = struct {
+        a: u8,
+        b: u64,
+        c: bool,
+    };
+
+    const my_struct = MyStruct{
+        .a = 42,
+        .b = 2934092390498,
+        .c = true,
+    };
+
+    const output = try DebugFormatter.sprintf(std.testing.allocator, my_struct);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with basic structs.MyStruct { a: 42, b: 2934092390498, c: true, }",
+    ));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with composite structs" {
+    const InnerStruct = struct {
+        b: u64,
+        c: bool,
+    };
+
+    const MyStruct = struct {
+        a: u8,
+        inner: InnerStruct,
+    };
+
+    const my_struct = MyStruct{
+        .a = 42,
+        .inner = InnerStruct{
+            .b = 2934092390498,
+            .c = true,
+        },
+    };
+
+    const output = try DebugFormatter.sprintf(std.testing.allocator, my_struct);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with composite structs.MyStruct { a: 42, inner: debug_formatter.test.expect DebugFormatter to work with composite structs.InnerStruct { b: 2934092390498, c: true, }, }",
+    ));
+    output.deinit();
+}
