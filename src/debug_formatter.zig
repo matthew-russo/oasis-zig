@@ -70,19 +70,19 @@ pub const DebugFormatter = struct {
                 try ctx.buffer.appendSlice(actual_buf);
                 break :blk ctx.buffer;
             },
-            .Undefined => "type: undefined", // void
-            .Null => "null", // void
-            .Optional => "type: optional", // Optional
-            .ErrorUnion => "type: error_union", // ErrorUnion
-            .ErrorSet => "type: error_set", // ErrorSet
-            .Enum => "type: enum", // Enum
-            .Union => "type: union", // Union
-            .Fn => "type: fn", // Fn
-            .Opaque => "type: opaque", // Opaque
-            .Frame => "type: frame", // Frame
-            .AnyFrame => "type: any_frame", // AnyFrame
-            .Vector => "type: vector", // Vector
-            .EnumLiteral => "type: enum_literal", // void
+            .Undefined => unreachable,
+            .Null => unreachable,
+            .Optional => "TODO: type: optional", // Optional
+            .ErrorUnion => "TODO: type: error_union", // ErrorUnion
+            .ErrorSet => "TODO: type: error_set", // ErrorSet
+            .Enum => "TODO: type: enum", // Enum
+            .Union => "TODO: type: union", // Union
+            .Fn => "TODO: type: fn", // Fn
+            .Opaque => "TODO: type: opaque", // Opaque
+            .Frame => "TODO: type: frame", // Frame
+            .AnyFrame => "TODO: type: any_frame", // AnyFrame
+            .Vector => "TODO: type: vector", // Vector
+            .EnumLiteral => "TODO: type: enum_literal", // void
         };
     }
 };
