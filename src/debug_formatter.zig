@@ -58,8 +58,18 @@ pub const DebugFormatter = struct {
             .Pointer => "type: pointer", // Pointer
             .Array => "type: array", // Array
             .Struct => "type: struct", // Struct
-            .ComptimeFloat => "type: comptime_float", // void
-            .ComptimeInt => "type: comptime_int", // void
+            .ComptimeFloat => blk: {
+                var buf: [256]u8 = undefined;
+                const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
+                try ctx.buffer.appendSlice(actual_buf);
+                break :blk ctx.buffer;
+            },
+            .ComptimeInt => blk: {
+                var buf: [256]u8 = undefined;
+                const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
+                try ctx.buffer.appendSlice(actual_buf);
+                break :blk ctx.buffer;
+            },
             .Undefined => "type: undefined", // void
             .Null => "null", // void
             .Optional => "type: optional", // Optional
@@ -145,6 +155,34 @@ test "expect DebugFormatter to work with floats" {
     const uu: f64 = 2890409822222.2394820;
     output = try DebugFormatter.sprintf(std.testing.allocator, uu);
     std.debug.assert(std.mem.eql(u8, output.items, "2.8904098222222393e12"));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with comptime ints" {
+    var output = try DebugFormatter.sprintf(std.testing.allocator, 42);
+    std.debug.assert(std.mem.eql(u8, output.items, "42"));
+    output.deinit();
+
+    output = try DebugFormatter.sprintf(std.testing.allocator, -73);
+    std.debug.assert(std.mem.eql(u8, output.items, "-73"));
+    output.deinit();
+
+    output = try DebugFormatter.sprintf(std.testing.allocator, 2890409822222);
+    std.debug.assert(std.mem.eql(u8, output.items, "2890409822222"));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with comptime floats" {
+    var output = try DebugFormatter.sprintf(std.testing.allocator, 42.42);
+    std.debug.assert(std.mem.eql(u8, output.items, "4.242e1"));
+    output.deinit();
+
+    output = try DebugFormatter.sprintf(std.testing.allocator, -73.73);
+    std.debug.assert(std.mem.eql(u8, output.items, "-7.373e1"));
+    output.deinit();
+
+    output = try DebugFormatter.sprintf(std.testing.allocator, 2890409822222.2394820);
+    std.debug.assert(std.mem.eql(u8, output.items, "2.890409822222239482e12"));
     output.deinit();
 }
 
