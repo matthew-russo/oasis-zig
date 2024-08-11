@@ -49,7 +49,12 @@ pub const DebugFormatter = struct {
                 try ctx.buffer.appendSlice(actual_buf);
                 break :blk ctx.buffer;
             },
-            .Float => "type: float", // Float
+            .Float => blk: {
+                var buf: [256]u8 = undefined;
+                const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
+                try ctx.buffer.appendSlice(actual_buf);
+                break :blk ctx.buffer;
+            },
             .Pointer => "type: pointer", // Pointer
             .Array => "type: array", // Array
             .Struct => "type: struct", // Struct
@@ -123,6 +128,23 @@ test "expect DebugFormatter to work with ints" {
     const uu: u64 = 2890409822222;
     output = try DebugFormatter.sprintf(std.testing.allocator, uu);
     std.debug.assert(std.mem.eql(u8, output.items, "2890409822222"));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with floats" {
+    const u: f32 = 42.42;
+    var output = try DebugFormatter.sprintf(std.testing.allocator, u);
+    std.debug.assert(std.mem.eql(u8, output.items, "4.242e1"));
+    output.deinit();
+
+    const i: f32 = -73.73;
+    output = try DebugFormatter.sprintf(std.testing.allocator, i);
+    std.debug.assert(std.mem.eql(u8, output.items, "-7.373e1"));
+    output.deinit();
+
+    const uu: f64 = 2890409822222.2394820;
+    output = try DebugFormatter.sprintf(std.testing.allocator, uu);
+    std.debug.assert(std.mem.eql(u8, output.items, "2.8904098222222393e12"));
     output.deinit();
 }
 
