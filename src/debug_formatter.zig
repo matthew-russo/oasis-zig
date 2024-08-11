@@ -34,7 +34,14 @@ pub const DebugFormatter = struct {
                 try ctx.buffer.appendSlice("void");
                 break :blk ctx.buffer;
             },
-            .Bool => "type: bool", // void
+            .Bool => blk: {
+                if (t) {
+                    try ctx.buffer.appendSlice("true");
+                } else {
+                    try ctx.buffer.appendSlice("false");
+                }
+                break :blk ctx.buffer;
+            },
             .NoReturn => "type: no_return", // void
             .Int => "type: int", // Int
             .Float => "type: float", // Float
@@ -84,6 +91,16 @@ test "expect DebugFormatter to work with void" {
 
     var output = try DebugFormatter.sprintf(std.testing.allocator, void_value);
     std.debug.assert(std.mem.eql(u8, output.items, "void"));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with bools" {
+    var output = try DebugFormatter.sprintf(std.testing.allocator, true);
+    std.debug.assert(std.mem.eql(u8, output.items, "true"));
+    output.deinit();
+
+    output = try DebugFormatter.sprintf(std.testing.allocator, false);
+    std.debug.assert(std.mem.eql(u8, output.items, "false"));
     output.deinit();
 }
 
