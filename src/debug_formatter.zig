@@ -79,7 +79,11 @@ pub const DebugFormatter = struct {
             .Optional => "TODO: type: optional", // Optional
             .ErrorUnion => "TODO: type: error_union", // ErrorUnion
             .ErrorSet => "TODO: type: error_set", // ErrorSet
-            .Enum => "TODO: type: enum", // Enum
+            .Enum => |_| {
+                try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
+                try ctx.buffer.appendSlice(".");
+                try ctx.buffer.appendSlice(@tagName(t));
+            },
             .Union => "TODO: type: union", // Union
             .Fn => "TODO: type: fn", // Fn
             .Opaque => "TODO: type: opaque", // Opaque
@@ -236,6 +240,41 @@ test "expect DebugFormatter to work with composite structs" {
         u8,
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with composite structs.MyStruct { a: 42, inner: debug_formatter.test.expect DebugFormatter to work with composite structs.InnerStruct { b: 2934092390498, c: true, }, }",
+    ));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with enums" {
+    const MyEnum = enum(u32) {
+        hundred = 100,
+        thousand = 1000,
+        million = 1000000,
+    };
+
+    var my_enum = MyEnum.hundred;
+    var output = try DebugFormatter.sprintf(std.testing.allocator, my_enum);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with enums.MyEnum.hundred",
+    ));
+    output.deinit();
+
+    my_enum = MyEnum.thousand;
+    output = try DebugFormatter.sprintf(std.testing.allocator, my_enum);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with enums.MyEnum.thousand",
+    ));
+    output.deinit();
+
+    my_enum = MyEnum.million;
+    output = try DebugFormatter.sprintf(std.testing.allocator, my_enum);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with enums.MyEnum.million",
     ));
     output.deinit();
 }
