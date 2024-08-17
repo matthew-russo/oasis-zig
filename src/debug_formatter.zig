@@ -84,7 +84,25 @@ pub const DebugFormatter = struct {
                 try ctx.buffer.appendSlice(".");
                 try ctx.buffer.appendSlice(@tagName(t));
             },
-            .Union => "TODO: type: union", // Union
+            .Union => |unio| {
+                if (unio.tag_type) |_| {
+                    try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
+                    try ctx.buffer.appendSlice(" { .");
+                    try ctx.buffer.appendSlice(@tagName(t));
+                    try ctx.buffer.appendSlice(": ");
+
+                    inline for (unio.fields, 0..) |field, i| {
+                        if (@intFromEnum(t) == i) {
+                            try Self.sprintfWithContext(ctx, @field(t, field.name));
+                            break;
+                        }
+                    }
+
+                    try ctx.buffer.appendSlice(" }");
+                } else {
+                    std.debug.panic("its impossible to format an untagged union as it cannot be known what field is active", .{});
+                }
+            },
             .Fn => "TODO: type: fn", // Fn
             .Opaque => "TODO: type: opaque", // Opaque
             .Frame => "TODO: type: frame", // Frame
@@ -275,6 +293,47 @@ test "expect DebugFormatter to work with enums" {
         u8,
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with enums.MyEnum.million",
+    ));
+    output.deinit();
+}
+
+test "expect DebugFormatter to work with tagged unions" {
+    const MyStruct = struct {
+        a: u8,
+        b: i64,
+        c: bool,
+    };
+
+    const MyTaggedUnion = union(enum) {
+        void_value: void,
+        u64_value: u64,
+        struct_value: MyStruct,
+    };
+
+    var my_tagged_union: MyTaggedUnion = MyTaggedUnion.void_value;
+    var output = try DebugFormatter.sprintf(std.testing.allocator, my_tagged_union);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with tagged unions.MyTaggedUnion { .void_value: void }",
+    ));
+    output.deinit();
+
+    my_tagged_union = MyTaggedUnion{ .u64_value = 90823409 };
+    output = try DebugFormatter.sprintf(std.testing.allocator, my_tagged_union);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with tagged unions.MyTaggedUnion { .u64_value: 90823409 }",
+    ));
+    output.deinit();
+
+    my_tagged_union = MyTaggedUnion{ .struct_value = MyStruct{ .a = 42, .b = -73, .c = true } };
+    output = try DebugFormatter.sprintf(std.testing.allocator, my_tagged_union);
+    std.debug.assert(std.mem.eql(
+        u8,
+        output.items,
+        "debug_formatter.test.expect DebugFormatter to work with tagged unions.MyTaggedUnion { .struct_value: debug_formatter.test.expect DebugFormatter to work with tagged unions.MyStruct { a: 42, b: -73, c: true, } }",
     ));
     output.deinit();
 }
