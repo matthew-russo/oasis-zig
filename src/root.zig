@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const collections = @import("collections/mod.zig");
 pub const debug_formatter = @import("debug_formatter.zig");
+pub const net = @import("net/mod.zig");
 pub const os = @import("os/mod.zig");
 
 /// a panicking function for stubbing out general todos

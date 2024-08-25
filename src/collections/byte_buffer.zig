@@ -73,7 +73,7 @@ pub const ByteBuffer = struct {
     /// if the allocation failed, otherwise returning the
     /// amount of bytes copied
     ///
-    /// the internal allocator is used to copie data to the
+    /// the internal allocator is used to copy data to the
     /// provided slice
     pub fn read(self: *Self, dst: []u8) anyerror!usize {
         const to_copy = self.getSlice(dst.len);

@@ -2,22 +2,22 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-const KqueueHandlerFn = *const fn (poller: *KqueuePoller, kevent: std.posix.Kevent, ctx: ?*const anyopaque) void;
+const KqueueHandlerFn = *const fn (poller: *KqueuePollerHandle, kevent: std.posix.Kevent, ctx: ?*anyopaque) void;
 
 pub const KqueueHandler = struct {
     const Self = @This();
 
-    ctx: ?*const anyopaque,
+    ctx: ?*anyopaque,
     handler: KqueueHandlerFn,
 
-    pub fn init(ctx: ?*const anyopaque, handler: KqueueHandlerFn) Self {
+    pub fn init(ctx: ?*anyopaque, handler: KqueueHandlerFn) Self {
         return Self{
             .ctx = ctx,
             .handler = handler,
         };
     }
 
-    fn handle(self: *Self, poller: *KqueuePoller, kevent: std.posix.Kevent) void {
+    fn handle(self: *Self, poller: *KqueuePollerHandle, kevent: std.posix.Kevent) void {
         self.handler(poller, kevent, self.ctx);
     }
 };
@@ -25,6 +25,20 @@ pub const KqueueHandler = struct {
 pub const KqueuePair = struct {
     ident: usize,
     filter: i16,
+};
+
+pub const KqueuePollerHandle = struct {
+    const Self = @This();
+
+    poller: *KqueuePoller,
+
+    pub fn addHandler(self: *Self, kqueuePair: KqueuePair, data: isize, kqueueHandler: KqueueHandler) void {
+        self.poller.addHandlerRaw(kqueuePair, data, kqueueHandler);
+    }
+
+    pub fn removeHandler(self: *Self, kqueuePair: KqueuePair, data: isize, kqueueHandler: KqueueHandler) void {
+        self.poller.addHandlerRaw(kqueuePair, data, kqueueHandler);
+    }
 };
 
 pub const KqueuePoller = struct {
@@ -100,6 +114,12 @@ pub const KqueuePoller = struct {
     }
 
     pub fn addHandler(self: *Self, kqueuePair: KqueuePair, data: isize, kqueueHandler: KqueueHandler) void {
+        self.handlers_guard.lock();
+        defer self.handlers_guard.unlock();
+        self.addHandlerRaw(kqueuePair, data, kqueueHandler);
+    }
+
+    fn addHandlerRaw(self: *Self, kqueuePair: KqueuePair, data: isize, kqueueHandler: KqueueHandler) void {
         const kevent: std.posix.Kevent = .{
             .ident = kqueuePair.ident,
             .filter = kqueuePair.filter,
@@ -115,15 +135,16 @@ pub const KqueuePoller = struct {
             std.debug.panic("[KqueuePoller] failed to register new event", .{});
         }
 
-        self.handlers_guard.lock();
-        defer self.handlers_guard.unlock();
         self.handlers.put(kqueuePair, kqueueHandler) catch unreachable;
     }
 
     pub fn removeHandler(self: *Self, kqueuePair: KqueuePair) void {
         self.handlers_guard.lock();
         defer self.handlers_guard.unlock();
+        self.removeHandlerRaw(kqueuePair);
+    }
 
+    pub fn removeHandlerRaw(self: *Self, kqueuePair: KqueuePair) void {
         if (self.handlers.getPtr(kqueuePair)) |_| {
             const kevent: std.posix.Kevent = .{
                 .ident = kqueuePair.ident,
@@ -173,14 +194,17 @@ pub const KqueuePoller = struct {
                     self.handlers_guard.lockShared();
                     defer self.handlers_guard.unlockShared();
                     const handler = self.handlers.getPtr(pair) orelse unreachable;
-                    handler.handle(self, event);
+                    var self_handle = KqueuePollerHandle{
+                        .poller = self,
+                    };
+                    handler.handle(&self_handle, event);
                 }
             }
         }
     }
 };
 
-fn test_handler(poller: *KqueuePoller, kevent: std.posix.Kevent, ctx: ?*const anyopaque) void {
+fn test_handler(poller: *KqueuePollerHandle, kevent: std.posix.Kevent, ctx: ?*anyopaque) void {
     _ = poller;
     _ = kevent;
     _ = ctx;
