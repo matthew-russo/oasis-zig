@@ -23,6 +23,11 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
+        .opentelemetry_zig = .{
+            .url = "https://github.com/matthew-russo/opentelemetry-zig/archive/refs/tags/testing-release.tar.gz",
+            .hash = "12209e59ff64ef9a00c6620e6ea598ea788fea7544ed547c2f4643bf947ffc18db47",
+        },
+
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
         //.example = .{
         //    // When updating this field to a new URL, be sure to delete the corresponding

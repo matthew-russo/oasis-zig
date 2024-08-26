@@ -24,15 +24,22 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
-
     // Create a zig module for our library
     _ = b.addModule("oasis", .{
         .root_source_file = b.path("src/root.zig"),
     });
+
+    const otel = b.dependency("opentelemetry_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    lib.root_module.addImport("opentelemetry-api", otel.module("opentelemetry-api"));
+
+    // This declares intent for the library to be installed into the standard
+    // location when the user invokes the "install" step (the default step when
+    // running `zig build`).
+    b.installArtifact(lib);
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
@@ -41,6 +48,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    lib_unit_tests.root_module.addImport("opentelemetry-api", otel.module("opentelemetry-api"));
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
