@@ -2,7 +2,11 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-const KqueueHandlerFn = *const fn (poller: *KqueuePollerHandle, kevent: std.posix.Kevent, ctx: ?*anyopaque) void;
+const KqueueHandlerFn = *const fn (
+    poller: *KqueuePollerHandle,
+    kevent: std.posix.Kevent,
+    ctx: ?*anyopaque,
+) void;
 
 pub const KqueueHandler = struct {
     const Self = @This();
@@ -166,7 +170,7 @@ pub const KqueuePoller = struct {
         }
     }
 
-    /// Blocks the current thread until the KqueuePoller is shut down via `signalShutdown`
+    /// Blocks the current thread until the KqueuePoller is shut down via `join`
     ///
     /// This is used internally as the entry point for `KqueuePoller.spawn`
     fn mainLoop(self: *Self) !void {
