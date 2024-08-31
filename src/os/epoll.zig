@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 
 const EpollerHandlerFn = *const fn (poller: *EpollerHandle, event: std.os.linux.epoll_event, ctx: ?*anyopaque) void;
 
-const EpollHandler = struct {
+pub const EpollHandler = struct {
     const Self = @This();
 
     ctx: ?*anyopaque,
@@ -22,7 +22,7 @@ const EpollHandler = struct {
     }
 };
 
-const EpollerHandle = struct {
+pub const EpollerHandle = struct {
     const Self = @This();
 
     poller: *Epoller,
@@ -36,7 +36,7 @@ const EpollerHandle = struct {
     }
 };
 
-const Epoller = struct {
+pub const Epoller = struct {
     const Self = @This();
 
     // 1ms (1 * 1000 nanos per micro * 1000 micros per milli)
