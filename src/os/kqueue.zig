@@ -40,8 +40,8 @@ pub const KqueuePollerHandle = struct {
         self.poller.addHandlerRaw(kqueuePair, data, kqueueHandler);
     }
 
-    pub fn removeHandler(self: *Self, kqueuePair: KqueuePair, data: isize, kqueueHandler: KqueueHandler) void {
-        self.poller.addHandlerRaw(kqueuePair, data, kqueueHandler);
+    pub fn removeHandler(self: *Self, kqueuePair: KqueuePair) void {
+        self.poller.removeHandlerRaw(kqueuePair);
     }
 };
 
