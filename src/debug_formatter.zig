@@ -27,33 +27,33 @@ pub const DebugFormatter = struct {
     pub fn sprintfWithContext(ctx: *FormatContext, t: anytype) !void {
         const type_info = @typeInfo(@TypeOf(t));
         switch (type_info) {
-            .Type => {
+            .type => {
                 try ctx.buffer.appendSlice(@typeName(t));
             },
-            .Void => {
+            .void => {
                 try ctx.buffer.appendSlice("void");
             },
-            .Bool => {
+            .bool => {
                 if (t) {
                     try ctx.buffer.appendSlice("true");
                 } else {
                     try ctx.buffer.appendSlice("false");
                 }
             },
-            .NoReturn => unreachable,
-            .Int => {
+            .noreturn => unreachable,
+            .int => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
                 try ctx.buffer.appendSlice(actual_buf);
             },
-            .Float => {
+            .float => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
                 try ctx.buffer.appendSlice(actual_buf);
             },
-            .Pointer => "type: pointer", // Pointer
-            .Array => "type: array", // Array
-            .Struct => |struc| {
+            .pointer => "type: pointer", // Pointer
+            .array => "type: array", // Array
+            .@"struct" => |struc| {
                 try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
                 try ctx.buffer.appendSlice(" { ");
                 inline for (struc.fields) |field| {
@@ -64,27 +64,27 @@ pub const DebugFormatter = struct {
                 }
                 try ctx.buffer.appendSlice("}");
             },
-            .ComptimeFloat => {
+            .comptime_float => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
                 try ctx.buffer.appendSlice(actual_buf);
             },
-            .ComptimeInt => {
+            .comptime_int => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
                 try ctx.buffer.appendSlice(actual_buf);
             },
-            .Undefined => unreachable,
-            .Null => unreachable,
-            .Optional => "TODO: type: optional", // Optional
-            .ErrorUnion => "TODO: type: error_union", // ErrorUnion
-            .ErrorSet => "TODO: type: error_set", // ErrorSet
-            .Enum => |_| {
+            .undefined => unreachable,
+            .null => unreachable,
+            .optional => "TODO: type: optional", // Optional
+            .error_union => "TODO: type: error_union", // ErrorUnion
+            .error_set => "TODO: type: error_set", // ErrorSet
+            .@"enum" => |_| {
                 try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
                 try ctx.buffer.appendSlice(".");
                 try ctx.buffer.appendSlice(@tagName(t));
             },
-            .Union => |unio| {
+            .@"union" => |unio| {
                 if (unio.tag_type) |_| {
                     try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
                     try ctx.buffer.appendSlice(" { .");
@@ -103,12 +103,12 @@ pub const DebugFormatter = struct {
                     std.debug.panic("its impossible to format an untagged union as it cannot be known what field is active", .{});
                 }
             },
-            .Fn => "TODO: type: fn", // Fn
-            .Opaque => "TODO: type: opaque", // Opaque
-            .Frame => "TODO: type: frame", // Frame
-            .AnyFrame => "TODO: type: any_frame", // AnyFrame
-            .Vector => "TODO: type: vector", // Vector
-            .EnumLiteral => "TODO: type: enum_literal", // void
+            .@"fn" => "TODO: type: fn", // Fn
+            .@"opaque" => "TODO: type: opaque", // Opaque
+            .frame => "TODO: type: frame", // Frame
+            .@"anyframe" => "TODO: type: any_frame", // AnyFrame
+            .vector => "TODO: type: vector", // Vector
+            .enum_literal => "TODO: type: enum_literal", // void
         }
     }
 };

@@ -30,8 +30,8 @@ pub const TcpConnectionHandler = struct {
         const Ptr = @TypeOf(ptr);
         const ptr_info = @typeInfo(Ptr);
 
-        if (ptr_info != .Pointer) @compileError("ptr must be a pointer");
-        if (ptr_info.Pointer.size != .One) @compileError("ptr must be a single item pointer");
+        if (ptr_info != .pointer) @compileError("ptr must be a pointer");
+        if (ptr_info.pointer.size != .One) @compileError("ptr must be a single item pointer");
 
         const gen = struct {
             pub fn pollImpl(
@@ -42,7 +42,7 @@ pub const TcpConnectionHandler = struct {
                 const self: Ptr = @ptrCast(@alignCast(pointer));
                 @call(
                     .always_inline,
-                    ptr_info.Pointer.child.poll,
+                    ptr_info.pointer.child.poll,
                     .{ self, read_buffer, write_buffer },
                 );
             }
