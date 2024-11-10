@@ -5,6 +5,7 @@ pub const debug_formatter = @import("debug_formatter.zig");
 pub const interaction = @import("interaction/mod.zig");
 pub const net = @import("net/mod.zig");
 pub const os = @import("os/mod.zig");
+pub const time = @import("time.zig");
 
 /// a panicking function for stubbing out general todos
 pub fn todo(msg: []const u8) noreturn {
