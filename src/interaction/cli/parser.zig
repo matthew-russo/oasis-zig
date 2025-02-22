@@ -494,8 +494,11 @@ pub const Parser = struct {
     ///
     pub fn parse(self: *Self, allocator: std.mem.Allocator, argc: usize, argv: [][]const u8) CliParsingError!Command {
         std.debug.assert(self.possible_commands.items.len != 0);
+
         // first arg is always the program name
-        std.debug.assert(argc > 1);
+        if (argc == 1) {
+            return CliParsingError.MissingCommand;
+        }
 
         var parser = CommandParser.init(&self.offset, argv[1..], self.possible_commands.items);
 
