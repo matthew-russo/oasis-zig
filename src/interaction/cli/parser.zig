@@ -4,7 +4,8 @@ pub const CliDefinitionError = error{
     DefinitionMissingName,
     DefinitionMissingHelpMessage,
     DefinitionMissingType,
-    AtLeastOneCommandRequired,
+    DuplicateCommandDefined,
+    DuplicateArgumentDefined,
 };
 
 pub const CliParsingError = error{
@@ -70,6 +71,37 @@ pub const ArgDefinition = struct {
     ty: CliType,
     required: bool,
 
+    pub fn matchesArgName(self: *const Self, argName: CliArgName) bool {
+        switch (argName) {
+            CliArgName.long => |long| {
+                return std.mem.eql(u8, long.name, self.long_name);
+            },
+            CliArgName.short => |short| {
+                if (self.short_name) |short_name| {
+                    return std.mem.eql(u8, short.name, short_name);
+                } else {
+                    return false;
+                }
+            },
+        }
+    }
+
+    pub fn overlapsWith(self: *const Self, other: *const Self) bool {
+        if (std.mem.eql(u8, self.long_name, other.long_name)) {
+            return true;
+        }
+
+        if (self.short_name) |our_short_name| {
+            if (other.short_name) |other_short_name| {
+                if (std.mem.eql(u8, our_short_name, other_short_name)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     fn argSummaryLengthWithoutHelp(self: *const Self) usize {
         var current_length: usize = 0;
         current_length += 2; // '  '
@@ -97,22 +129,7 @@ pub const ArgDefinition = struct {
                 std.debug.print(" ", .{});
             }
         }
-        std.debug.print("{s}", .{self.help});
-    }
-
-    pub fn matchesArgName(self: *const Self, argName: CliArgName) bool {
-        switch (argName) {
-            CliArgName.long => |long| {
-                return std.mem.eql(u8, long.name, self.long_name);
-            },
-            CliArgName.short => |short| {
-                if (self.short_name) |short_name| {
-                    return std.mem.eql(u8, short.name, short_name);
-                } else {
-                    return false;
-                }
-            },
-        }
+        std.debug.print("{s}\n", .{self.help});
     }
 };
 
@@ -217,41 +234,23 @@ pub const CommandDefinition = struct {
         self.possible_subcommands.deinit();
     }
 
-    pub fn printHelp(self: *const Self) void {
-        std.debug.print("{s}\n\n", .{self.help});
-        std.debug.print("USAGE: {s}", .{self.name});
-        var option_padding_size: usize = 0;
-        var command_padding_size: usize = 0;
-        for (self.possible_args.items) |possible_arg| {
-            if (possible_arg.required) {
-                std.debug.print(" --{s} <{s}>", .{ self.name, self.name });
-            }
-            const current_length: usize = possible_arg.argSummaryLengthWithoutHelp();
-            if (current_length > option_padding_size) {
-                option_padding_size = current_length;
-            }
-        }
-        std.debug.print(" [OPTIONS] [COMMAND]", .{});
-        std.debug.print("\n\nCommands:\n", .{});
-        for (self.possible_subcommands.items) |possible_subcommand| {
-            const current_length: usize = 2 + possible_subcommand.name.len + 2; // '  <name>  '
-            if (current_length > option_padding_size) {
-                command_padding_size = current_length;
+    pub fn overlapsWith(self: *const Self, other: *const Self) bool {
+        return std.mem.eql(u8, self.name, other.name);
+    }
+
+    pub fn commandSummaryLengthWithoutHelp(self: *const Self) usize {
+        // '  <name  '
+        return 2 + self.name.len + 2;
+    }
+
+    pub fn printCommandSummary(self: *const Self, min_spacing_before_help: usize) void {
+        std.debug.print("  {s}  ", .{self.name});
+        if (self.commandSummaryLengthWithoutHelp() < min_spacing_before_help) {
+            for (0..min_spacing_before_help - self.commandSummaryLengthWithoutHelp()) |_| {
+                std.debug.print(" ", .{});
             }
         }
-        for (self.possible_subcommands.items) |possible_subcommand| {
-            std.debug.print("  {s}  ", .{possible_subcommand.name});
-            if (2 + possible_subcommand.name.len + 2 < command_padding_size) {
-                for (0..command_padding_size - 2 - possible_subcommand.name.len - 2) |_| {
-                    std.debug.print(" ", .{});
-                }
-            }
-            std.debug.print("{s}\n", .{possible_subcommand.help});
-        }
-        std.debug.print("\nOptions:\n", .{});
-        for (self.possible_args.items) |possible_arg| {
-            possible_arg.printArgSummary(option_padding_size);
-        }
+        std.debug.print("{s}\n", .{self.help});
     }
 };
 
@@ -527,20 +526,33 @@ pub const CommandParser = struct {
     }
 };
 
-pub const Parser = struct {
+pub const CliApp = struct {
     const Self = @This();
 
     offset: usize,
+
+    name: []const u8,
+    help: []const u8,
+    possible_args: std.ArrayList(ArgDefinition),
     possible_commands: std.ArrayList(CommandDefinition),
 
-    pub fn init(possible_commands: std.ArrayList(CommandDefinition)) Self {
+    pub fn init(
+        name: []const u8,
+        help: []const u8,
+        possible_args: std.ArrayList(ArgDefinition),
+        possible_commands: std.ArrayList(CommandDefinition),
+    ) Self {
         return Self{
+            .name = name,
+            .help = help,
+            .possible_args = possible_args,
             .offset = 0,
             .possible_commands = possible_commands,
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.possible_args.deinit();
         for (self.possible_commands.items) |possible_command| {
             possible_command.deinit();
         }
@@ -548,8 +560,33 @@ pub const Parser = struct {
     }
 
     pub fn printHelp(self: *const Self) void {
+        std.debug.print("{s}\n\n", .{self.help});
+        std.debug.print("USAGE: {s}", .{self.name});
+        var option_padding_size: usize = 0;
+        var command_padding_size: usize = 0;
+        for (self.possible_args.items) |possible_arg| {
+            if (possible_arg.required) {
+                std.debug.print(" --{s} <{s}>", .{ self.name, self.name });
+            }
+            const current_length: usize = possible_arg.argSummaryLengthWithoutHelp();
+            if (current_length > option_padding_size) {
+                option_padding_size = current_length;
+            }
+        }
+        std.debug.print(" [OPTIONS] [COMMAND]", .{});
+        std.debug.print("\n\nCommands:\n", .{});
         for (self.possible_commands.items) |possible_command| {
-            possible_command.printHelp();
+            const current_length: usize = possible_command.commandSummaryLengthWithoutHelp();
+            if (current_length > option_padding_size) {
+                command_padding_size = current_length;
+            }
+        }
+        for (self.possible_commands.items) |possible_command| {
+            possible_command.printCommandSummary(command_padding_size);
+        }
+        std.debug.print("\nOptions:\n", .{});
+        for (self.possible_args.items) |possible_arg| {
+            possible_arg.printArgSummary(option_padding_size);
         }
     }
 
@@ -585,15 +622,35 @@ pub const Parser = struct {
     }
 };
 
-pub const ParserBuilder = struct {
+pub const CliAppBuilder = struct {
     const Self = @This();
 
+    name: []const u8,
+    help: []const u8,
+    possible_args: std.ArrayList(ArgDefinition),
     possible_commands: std.ArrayList(CommandDefinition),
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, help: []const u8) Self {
         return Self{
+            .name = name,
+            .help = help,
+            .possible_args = std.ArrayList(ArgDefinition).init(allocator),
             .possible_commands = std.ArrayList(CommandDefinition).init(allocator),
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.possible_args.deinit();
+        for (self.possible_commands.items) |possible_command| {
+            possible_command.deinit();
+        }
+        self.possible_commands.deinit();
+    }
+
+    pub fn withArg(s: Self, arg_def: ArgDefinition) Self {
+        var self = s;
+        self.possible_args.append(arg_def) catch unreachable;
+        return self;
     }
 
     pub fn withCommand(s: Self, command_def: CommandDefinition) Self {
@@ -602,12 +659,34 @@ pub const ParserBuilder = struct {
         return self;
     }
 
-    pub fn build(self: Self) CliDefinitionError!Parser {
-        if (self.possible_commands.items.len == 0) {
-            return CliDefinitionError.AtLeastOneCommandRequired;
+    pub fn build(self: Self) CliDefinitionError!CliApp {
+        for (0..self.possible_args.items.len) |i| {
+            for (i..self.possible_args.items.len) |j| {
+                if (i == j) {
+                    continue;
+                }
+                if (self.possible_args.items[i].overlapsWith(&self.possible_args.items[j])) {
+                    var s = self;
+                    s.deinit();
+                    return CliDefinitionError.DuplicateArgumentDefined;
+                }
+            }
         }
 
-        return Parser.init(self.possible_commands);
+        for (0..self.possible_commands.items.len) |i| {
+            for (i..self.possible_commands.items.len) |j| {
+                if (i == j) {
+                    continue;
+                }
+                if (self.possible_commands.items[i].overlapsWith(&self.possible_commands.items[j])) {
+                    var s = self;
+                    s.deinit();
+                    return CliDefinitionError.DuplicateCommandDefined;
+                }
+            }
+        }
+
+        return CliApp.init(self.name, self.help, self.possible_args, self.possible_commands);
     }
 };
 
@@ -816,11 +895,6 @@ test "successful_complex_command" {
     const subcommand2_subcommand1 = subcommand2.possible_subcommands.items[0];
     try std.testing.expectEqualStrings(subcommand2_subcommand1.name, "subcommand2subcommand1");
     try std.testing.expectEqualStrings(subcommand2_subcommand1.help, "test help msg for subcommand2subcommand1");
-}
-
-test "empty_parser_returns_error" {
-    const err = ParserBuilder.init(std.testing.allocator).build();
-    try std.testing.expectEqual(err, CliDefinitionError.AtLeastOneCommandRequired);
 }
 
 // ============================= ArgParser Tests ==============================
@@ -1232,36 +1306,78 @@ test "command_parser_ignores_unknown_subcommands" {
     try std.testing.expectEqual(command.subcommand, null);
 }
 
+// ============================= CliApp Tests ==============================
+test "empty_cli_app" {
+    _ = try CliAppBuilder.init(std.testing.allocator, "test_app", "a sample application to unit test the module")
+        .build();
+}
+
+test "cli_app_disallows_duplicate_commands" {
+    // zig fmt: off
+    const err = CliAppBuilder.init(std.testing.allocator, "test_app", "a sample application to unit test the module")
+        .withCommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+            .withName("command")
+            .withHelp("test help msg for command")
+            .build())
+        .withCommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+            .withName("command")
+            .withHelp("test help msg for command")
+            .build())
+        .build();
+    // zig fmt: on
+    try std.testing.expectEqual(err, CliDefinitionError.DuplicateCommandDefined);
+}
+
+test "cli_app_disallows_duplicate_args" {
+    // zig fmt: off
+    const err = CliAppBuilder.init(std.testing.allocator, "test_app", "a sample application to unit test the module")
+        .withArg(try ArgDefinitionBuilder.init()
+            .withLongName("arg")
+            .withHelp("test help msg for arg")
+            .withType(CliType.u64)
+            .build())
+        .withArg(try ArgDefinitionBuilder.init()
+            .withLongName("arg")
+            .withHelp("test help msg for arg")
+            .withType(CliType.u64)
+            .build())
+        .build();
+    // zig fmt: on
+    try std.testing.expectEqual(err, CliDefinitionError.DuplicateArgumentDefined);
+}
+
 // ============================= End-to-end Tests ==============================
 test "end_to_end_cli_parser_test" {
-    var cli_parser = try ParserBuilder.init(std.testing.allocator)
+    // zig fmt: off
+    var cli_parser = try CliAppBuilder.init(std.testing.allocator, "test_app", "a sample application to unit test the module")
         .withCommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("command")
-        .withHelp("test help msg")
-        .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("commandArg1")
-        .withHelp("test help msg for commandArg1")
-        .withType(CliType.u64)
-        .build())
-        .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand1")
-        .withHelp("test help msg for subcommand1")
-        .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("subcommand1Arg1")
-        .withHelp("test help msg for subcommand1Arg1")
-        .withType(CliType.i64)
-        .build())
-        .build())
-        .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand2")
-        .withHelp("test help msg for subcommand2")
-        .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand2subcommand1")
-        .withHelp("test help msg for subcommand2subcommand1")
-        .build())
-        .build())
-        .build())
+            .withName("command")
+            .withHelp("test help msg")
+            .withArg(try ArgDefinitionBuilder.init()
+                .withLongName("commandArg1")
+                .withHelp("test help msg for commandArg1")
+                .withType(CliType.u64)
+                .build())
+            .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+                .withName("subcommand1")
+                .withHelp("test help msg for subcommand1")
+                .withArg(try ArgDefinitionBuilder.init()
+                    .withLongName("subcommand1Arg1")
+                    .withHelp("test help msg for subcommand1Arg1")
+                    .withType(CliType.i64)
+                    .build())
+                .build())
+            .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+                .withName("subcommand2")
+                .withHelp("test help msg for subcommand2")
+                .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+                    .withName("subcommand2subcommand1")
+                    .withHelp("test help msg for subcommand2subcommand1")
+                    .build())
+                .build())
+            .build())
         .build();
+    // zig fmt: on
 
     defer cli_parser.deinit();
 
