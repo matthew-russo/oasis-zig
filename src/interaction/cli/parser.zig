@@ -573,20 +573,27 @@ pub const CliApp = struct {
                 option_padding_size = current_length;
             }
         }
-        std.debug.print(" [OPTIONS] [COMMAND]", .{});
-        std.debug.print("\n\nCommands:\n", .{});
-        for (self.possible_commands.items) |possible_command| {
-            const current_length: usize = possible_command.commandSummaryLengthWithoutHelp();
-            if (current_length > option_padding_size) {
-                command_padding_size = current_length;
+        if (self.possible_args.items.len > 0) {
+            std.debug.print(" [OPTIONS]", .{});
+        }
+        if (self.possible_commands.items.len > 0) {
+            std.debug.print(" [COMMAND]", .{});
+            std.debug.print("\n\nCommands:\n", .{});
+            for (self.possible_commands.items) |possible_command| {
+                const current_length: usize = possible_command.commandSummaryLengthWithoutHelp();
+                if (current_length > option_padding_size) {
+                    command_padding_size = current_length;
+                }
+            }
+            for (self.possible_commands.items) |possible_command| {
+                possible_command.printCommandSummary(command_padding_size);
             }
         }
-        for (self.possible_commands.items) |possible_command| {
-            possible_command.printCommandSummary(command_padding_size);
-        }
-        std.debug.print("\nOptions:\n", .{});
-        for (self.possible_args.items) |possible_arg| {
-            possible_arg.printArgSummary(option_padding_size);
+        if (self.possible_args.items.len > 0) {
+            std.debug.print("\nOptions:\n", .{});
+            for (self.possible_args.items) |possible_arg| {
+                possible_arg.printArgSummary(option_padding_size);
+            }
         }
     }
 
