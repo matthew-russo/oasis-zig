@@ -70,6 +70,36 @@ pub const ArgDefinition = struct {
     ty: CliType,
     required: bool,
 
+    fn argSummaryLengthWithoutHelp(self: *const Self) usize {
+        var current_length: usize = 0;
+        current_length += 2; // '  '
+        if (self.short_name) |short_name| {
+            current_length += 1; // '-'
+            current_length += short_name.len;
+            current_length += 2; // ', '
+        }
+        current_length += 2; // '--'
+        current_length += self.long_name.len;
+        current_length += 1; // ' '
+        current_length += self.long_name.len;
+        current_length += 1; // ' '
+        return current_length;
+    }
+
+    fn printArgSummary(self: *const Self, min_spacing_before_help: usize) void {
+        std.debug.print("  ", .{});
+        if (self.short_name) |short_name| {
+            std.debug.print("-{s}, ", .{short_name});
+        }
+        std.debug.print("--{s} <{s}> ", .{ self.long_name, self.long_name });
+        if (self.argSummaryLengthWithoutHelp() < min_spacing_before_help) {
+            for (0..min_spacing_before_help - self.argSummaryLengthWithoutHelp()) |_| {
+                std.debug.print(" ", .{});
+            }
+        }
+        std.debug.print("{s}", .{self.help});
+    }
+
     pub fn matchesArgName(self: *const Self, argName: CliArgName) bool {
         switch (argName) {
             CliArgName.long => |long| {
@@ -185,6 +215,43 @@ pub const CommandDefinition = struct {
             possible_subcommand.deinit();
         }
         self.possible_subcommands.deinit();
+    }
+
+    pub fn printHelp(self: *const Self) void {
+        std.debug.print("{s}\n\n", .{self.help});
+        std.debug.print("USAGE: {s}", .{self.name});
+        var option_padding_size: usize = 0;
+        var command_padding_size: usize = 0;
+        for (self.possible_args.items) |possible_arg| {
+            if (possible_arg.required) {
+                std.debug.print(" --{s} <{s}>", .{ self.name, self.name });
+            }
+            const current_length: usize = possible_arg.argSummaryLengthWithoutHelp();
+            if (current_length > option_padding_size) {
+                option_padding_size = current_length;
+            }
+        }
+        std.debug.print(" [OPTIONS] [COMMAND]", .{});
+        std.debug.print("\n\nCommands:\n", .{});
+        for (self.possible_subcommands.items) |possible_subcommand| {
+            const current_length: usize = 2 + possible_subcommand.name.len + 2; // '  <name>  '
+            if (current_length > option_padding_size) {
+                command_padding_size = current_length;
+            }
+        }
+        for (self.possible_subcommands.items) |possible_subcommand| {
+            std.debug.print("  {s}  ", .{possible_subcommand.name});
+            if (2 + possible_subcommand.name.len + 2 < command_padding_size) {
+                for (0..command_padding_size - 2 - possible_subcommand.name.len - 2) |_| {
+                    std.debug.print(" ", .{});
+                }
+            }
+            std.debug.print("{s}\n", .{possible_subcommand.help});
+        }
+        std.debug.print("\nOptions:\n", .{});
+        for (self.possible_args.items) |possible_arg| {
+            possible_arg.printArgSummary(option_padding_size);
+        }
     }
 };
 
@@ -478,6 +545,12 @@ pub const Parser = struct {
             possible_command.deinit();
         }
         self.possible_commands.deinit();
+    }
+
+    pub fn printHelp(self: *const Self) void {
+        for (self.possible_commands.items) |possible_command| {
+            possible_command.printHelp();
+        }
     }
 
     pub fn reset(self: *Self) void {
@@ -1091,22 +1164,18 @@ test "command_parser_parses_command_with_subcommand" {
 test "command_parser_parses_command_with_multiple_subcommands" {
     var offset: usize = 0;
     var cli_args: [2][]const u8 = [_][]const u8{ "command", "subcommand2" };
-    var command_defs: [1]CommandDefinition = [_]CommandDefinition{
-        try CommandDefinitionBuilder.init(std.testing.allocator)
+    var command_defs: [1]CommandDefinition = [_]CommandDefinition{try CommandDefinitionBuilder.init(std.testing.allocator)
         .withName("command")
         .withHelp("test_command")
-        .withSubcommand(
-            try CommandDefinitionBuilder.init(std.testing.allocator)
-            .withName("subcommand1")
-            .withHelp("test subcommand1")
-            .build())
-        .withSubcommand(
-            try CommandDefinitionBuilder.init(std.testing.allocator)
-            .withName("subcommand2")
-            .withHelp("test subcommand2")
-            .build())
-        .build()
-    };
+        .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+        .withName("subcommand1")
+        .withHelp("test subcommand1")
+        .build())
+        .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+        .withName("subcommand2")
+        .withHelp("test subcommand2")
+        .build())
+        .build()};
     defer command_defs[0].deinit();
     var parser = CommandParser.init(&offset, &cli_args, &command_defs);
     const command = (try parser.parse(std.testing.allocator)).?;
@@ -1195,6 +1264,8 @@ test "end_to_end_cli_parser_test" {
         .build();
 
     defer cli_parser.deinit();
+
+    cli_parser.printHelp();
 
     const argc1 = 7;
     var argv1: [argc1][]const u8 = [_][]const u8{ "my_test", "command", "--commandArg1", "42", "subcommand1", "--subcommand1Arg1", "-42" };
