@@ -1,14 +1,8 @@
 const std = @import("std");
 
 pub fn nanosSinceEpoch() u64 {
-    // posix systems return a timespec, convert it to a u64
-    const now_instant = std.time.Instant.now() catch unreachable;
-    const timespec = now_instant.timestamp;
-    const secs_as_u64: u64 = @intCast(timespec.sec);
-    const nsecs_as_u64: u64 = @intCast(timespec.nsec);
-    const secs_as_ns = secs_as_u64 * std.time.ns_per_s;
-    const now = secs_as_ns + nsecs_as_u64;
-    return now;
+    const nanosUnsigned: u128 = @intCast(std.time.nanoTimestamp());
+    return @truncate(nanosUnsigned);
 }
 
 pub fn microsSinceEpoch() u64 {
