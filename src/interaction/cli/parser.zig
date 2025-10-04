@@ -208,8 +208,10 @@ pub const Command = struct {
     args: std.ArrayList(Arg),
     subcommand: ?*Command,
 
-    pub fn deinit(self: *const Self) void {
-        self.args.deinit();
+    pub fn deinit(s: *Self) void {
+        var self = s;
+
+        self.args.deinit(self.allocator);
 
         if (self.subcommand) |subcommand| {
             subcommand.*.deinit();
@@ -221,17 +223,20 @@ pub const Command = struct {
 pub const CommandDefinition = struct {
     const Self = @This();
 
+    allocator: std.mem.Allocator,
+
     name: []const u8,
     help: []const u8,
     possible_args: std.ArrayList(ArgDefinition),
     possible_subcommands: std.ArrayList(CommandDefinition),
 
-    pub fn deinit(self: *const Self) void {
-        self.possible_args.deinit();
-        for (self.possible_subcommands.items) |possible_subcommand| {
+    pub fn deinit(s: *Self) void {
+        var self = s;
+        self.possible_args.deinit(self.allocator);
+        for (self.possible_subcommands.items) |*possible_subcommand| {
             possible_subcommand.deinit();
         }
-        self.possible_subcommands.deinit();
+        self.possible_subcommands.deinit(self.allocator);
     }
 
     pub fn overlapsWith(self: *const Self, other: *const Self) bool {
@@ -257,6 +262,8 @@ pub const CommandDefinition = struct {
 pub const CommandDefinitionBuilder = struct {
     const Self = @This();
 
+    allocator: std.mem.Allocator,
+
     name: ?[]const u8,
     help: ?[]const u8,
     possible_args: std.ArrayList(ArgDefinition),
@@ -264,10 +271,11 @@ pub const CommandDefinitionBuilder = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
+            .allocator = allocator,
             .name = null,
             .help = null,
-            .possible_args = std.ArrayList(ArgDefinition).init(allocator),
-            .possible_subcommands = std.ArrayList(CommandDefinition).init(allocator),
+            .possible_args = std.ArrayList(ArgDefinition).empty,
+            .possible_subcommands = std.ArrayList(CommandDefinition).empty,
         };
     }
 
@@ -286,31 +294,34 @@ pub const CommandDefinitionBuilder = struct {
     pub fn withArg(s: Self, arg_def: ArgDefinition) Self {
         var self = s;
         // TODO handle errors
-        self.possible_args.append(arg_def) catch unreachable;
+        self.possible_args.append(self.allocator, arg_def) catch unreachable;
         return self;
     }
 
     pub fn withSubcommand(s: Self, subcommand_def: CommandDefinition) Self {
         var self = s;
         // TODO handle errors
-        self.possible_subcommands.append(subcommand_def) catch unreachable;
+        self.possible_subcommands.append(self.allocator, subcommand_def) catch unreachable;
         return self;
     }
 
-    pub fn build(self: Self) CliDefinitionError!CommandDefinition {
+    pub fn build(s: Self) CliDefinitionError!CommandDefinition {
+        var self = s;
+
         if (self.name) |_| {} else {
-            self.possible_args.deinit();
-            self.possible_subcommands.deinit();
+            self.possible_args.deinit(self.allocator);
+            self.possible_subcommands.deinit(self.allocator);
             return CliDefinitionError.DefinitionMissingName;
         }
 
         if (self.help) |_| {} else {
-            self.possible_args.deinit();
-            self.possible_subcommands.deinit();
+            self.possible_args.deinit(self.allocator);
+            self.possible_subcommands.deinit(self.allocator);
             return CliDefinitionError.DefinitionMissingHelpMessage;
         }
 
         return CommandDefinition{
+            .allocator = self.allocator,
             .name = self.name.?,
             .help = self.help.?,
             .possible_args = self.possible_args,
@@ -425,12 +436,15 @@ pub const ArgParser = struct {
 pub const CommandParser = struct {
     const Self = @This();
 
+    allocator: std.mem.Allocator,
+
     offset: *usize,
     cli_args: [][]const u8,
     valid_commands: []CommandDefinition,
 
-    pub fn init(offset: *usize, cli_args: [][]const u8, valid_commands: []CommandDefinition) Self {
+    pub fn init(allocator: std.mem.Allocator, offset: *usize, cli_args: [][]const u8, valid_commands: []CommandDefinition) Self {
         return Self{
+            .allocator = allocator,
             .offset = offset,
             .cli_args = cli_args,
             .valid_commands = valid_commands,
@@ -446,7 +460,7 @@ pub const CommandParser = struct {
             return null;
         }
 
-        var args = std.ArrayList(Arg).init(allocator);
+        var args = std.ArrayList(Arg).empty;
         const curr_name = self.cli_args[self.offset.*];
         self.offset.* += 1;
 
@@ -469,7 +483,7 @@ pub const CommandParser = struct {
                 const maybe_arg = try arg_parser.parse();
 
                 if (maybe_arg) |arg| {
-                    args.append(arg) catch unreachable;
+                    args.append(self.allocator, arg) catch unreachable;
                 } else {
                     break;
                 }
@@ -495,6 +509,7 @@ pub const CommandParser = struct {
 
             // 3. chomp subcommand if available
             var subcommand_parser = CommandParser.init(
+                std.testing.allocator,
                 self.offset,
                 self.cli_args,
                 target_command_def.possible_subcommands.items,
@@ -529,6 +544,8 @@ pub const CommandParser = struct {
 pub const CliApp = struct {
     const Self = @This();
 
+    allocator: std.mem.Allocator,
+
     offset: usize,
 
     name: []const u8,
@@ -537,12 +554,14 @@ pub const CliApp = struct {
     possible_commands: std.ArrayList(CommandDefinition),
 
     pub fn init(
+        allocator: std.mem.Allocator,
         name: []const u8,
         help: []const u8,
         possible_args: std.ArrayList(ArgDefinition),
         possible_commands: std.ArrayList(CommandDefinition),
     ) Self {
         return Self{
+            .allocator = allocator,
             .name = name,
             .help = help,
             .possible_args = possible_args,
@@ -552,11 +571,11 @@ pub const CliApp = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.possible_args.deinit();
-        for (self.possible_commands.items) |possible_command| {
+        self.possible_args.deinit(self.allocator);
+        for (self.possible_commands.items) |*possible_command| {
             possible_command.deinit();
         }
-        self.possible_commands.deinit();
+        self.possible_commands.deinit(self.allocator);
     }
 
     pub fn printHelp(self: *const Self) void {
@@ -617,7 +636,7 @@ pub const CliApp = struct {
             return CliParsingError.MissingCommand;
         }
 
-        var parser = CommandParser.init(&self.offset, argv[1..], self.possible_commands.items);
+        var parser = CommandParser.init(std.testing.allocator, &self.offset, argv[1..], self.possible_commands.items);
 
         const maybe_subcommand = try parser.parse(allocator);
 
@@ -632,6 +651,8 @@ pub const CliApp = struct {
 pub const CliAppBuilder = struct {
     const Self = @This();
 
+    allocator: std.mem.Allocator,
+
     name: []const u8,
     help: []const u8,
     possible_args: std.ArrayList(ArgDefinition),
@@ -639,30 +660,33 @@ pub const CliAppBuilder = struct {
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, help: []const u8) Self {
         return Self{
+            .allocator = allocator,
+
             .name = name,
             .help = help,
-            .possible_args = std.ArrayList(ArgDefinition).init(allocator),
-            .possible_commands = std.ArrayList(CommandDefinition).init(allocator),
+            .possible_args = std.ArrayList(ArgDefinition).empty,
+            .possible_commands = std.ArrayList(CommandDefinition).empty,
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.possible_args.deinit();
-        for (self.possible_commands.items) |possible_command| {
+    pub fn deinit(s: *Self) void {
+        var self = s;
+        self.possible_args.deinit(self.allocator);
+        for (self.possible_commands.items) |*possible_command| {
             possible_command.deinit();
         }
-        self.possible_commands.deinit();
+        self.possible_commands.deinit(self.allocator);
     }
 
     pub fn withArg(s: Self, arg_def: ArgDefinition) Self {
         var self = s;
-        self.possible_args.append(arg_def) catch unreachable;
+        self.possible_args.append(self.allocator, arg_def) catch unreachable;
         return self;
     }
 
     pub fn withCommand(s: Self, command_def: CommandDefinition) Self {
         var self = s;
-        self.possible_commands.append(command_def) catch unreachable;
+        self.possible_commands.append(self.allocator, command_def) catch unreachable;
         return self;
     }
 
@@ -693,7 +717,7 @@ pub const CliAppBuilder = struct {
             }
         }
 
-        return CliApp.init(self.name, self.help, self.possible_args, self.possible_commands);
+        return CliApp.init(self.allocator, self.name, self.help, self.possible_args, self.possible_commands);
     }
 };
 
@@ -764,7 +788,7 @@ test "successful_basic_command_definition" {
         .withHelp("test help msg")
         .build();
 
-    const command_def = try maybe_command_def;
+    var command_def = try maybe_command_def;
     defer command_def.deinit();
 
     try std.testing.expectEqualStrings(command_def.name, "name");
@@ -779,18 +803,18 @@ test "successful_command_with_args_definition" {
         .withName("name")
         .withHelp("test help msg")
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("commandArg1")
-        .withHelp("test help msg for commandArg1")
-        .withType(CliType.u64)
-        .build())
+            .withLongName("commandArg1")
+            .withHelp("test help msg for commandArg1")
+            .withType(CliType.u64)
+            .build())
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("commandArg2")
-        .withHelp("test help msg for commandArg2")
-        .withType(CliType.i64)
-        .build())
+            .withLongName("commandArg2")
+            .withHelp("test help msg for commandArg2")
+            .withType(CliType.i64)
+            .build())
         .build();
 
-    const command_def = try maybe_command_def;
+    var command_def = try maybe_command_def;
     defer command_def.deinit();
 
     try std.testing.expectEqualStrings(command_def.name, "name");
@@ -816,16 +840,16 @@ test "successful_command_with_subcommands_definition" {
         .withName("name")
         .withHelp("test help msg")
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand1")
-        .withHelp("test help msg for subcommand1")
-        .build())
+            .withName("subcommand1")
+            .withHelp("test help msg for subcommand1")
+            .build())
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand2")
-        .withHelp("test help msg for subcommand2")
-        .build())
+            .withName("subcommand2")
+            .withHelp("test help msg for subcommand2")
+            .build())
         .build();
 
-    const command_def = try maybe_command_def;
+    var command_def = try maybe_command_def;
     defer command_def.deinit();
 
     try std.testing.expectEqualStrings(command_def.name, "name");
@@ -849,30 +873,30 @@ test "successful_complex_command" {
         .withName("name")
         .withHelp("test help msg")
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("commandArg1")
-        .withHelp("test help msg for commandArg1")
-        .withType(CliType.u64)
-        .build())
+            .withLongName("commandArg1")
+            .withHelp("test help msg for commandArg1")
+            .withType(CliType.u64)
+            .build())
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand1")
-        .withHelp("test help msg for subcommand1")
-        .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("subcommand1Arg1")
-        .withHelp("test help msg for subcommand1Arg1")
-        .withType(CliType.i64)
-        .build())
-        .build())
+            .withName("subcommand1")
+            .withHelp("test help msg for subcommand1")
+            .withArg(try ArgDefinitionBuilder.init()
+                .withLongName("subcommand1Arg1")
+                .withHelp("test help msg for subcommand1Arg1")
+                .withType(CliType.i64)
+                .build())
+            .build())
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand2")
-        .withHelp("test help msg for subcommand2")
-        .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand2subcommand1")
-        .withHelp("test help msg for subcommand2subcommand1")
-        .build())
-        .build())
+            .withName("subcommand2")
+            .withHelp("test help msg for subcommand2")
+            .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
+                .withName("subcommand2subcommand1")
+                .withHelp("test help msg for subcommand2subcommand1")
+                .build())
+            .build())
         .build();
 
-    const command_def = try maybe_command_def;
+    var command_def = try maybe_command_def;
     defer command_def.deinit();
 
     try std.testing.expectEqualStrings(command_def.name, "name");
@@ -1075,7 +1099,7 @@ test "arg_parser_parses_string" {
 
 test "command_parser_returns_ok_none_with_empty_args" {
     var offset: usize = 0;
-    var parser = CommandParser.init(&offset, &.{}, &.{});
+    var parser = CommandParser.init(std.testing.allocator, &offset, &.{}, &.{});
     const command = try parser.parse(std.testing.allocator);
     try std.testing.expectEqual(command, null);
 }
@@ -1083,7 +1107,7 @@ test "command_parser_returns_ok_none_with_empty_args" {
 test "command_parser_returns_ok_none_with_empty_command_def" {
     var offset: usize = 0;
     var cli_args: [1][]const u8 = [_][]const u8{"command"};
-    var parser = CommandParser.init(&offset, &cli_args, &.{});
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &.{});
     const command = try parser.parse(std.testing.allocator);
     try std.testing.expectEqual(command, null);
 }
@@ -1092,13 +1116,14 @@ test "command_parser_parses_basic_command_with_no_args_or_subcommands" {
     var offset: usize = 0;
     var cli_args: [1][]const u8 = [_][]const u8{"command"};
     var command_defs: [1]CommandDefinition = [_]CommandDefinition{CommandDefinition{
+        .allocator = std.testing.allocator,
         .name = "command",
         .help = "test_command",
-        .possible_args = std.ArrayList(ArgDefinition).init(std.testing.allocator),
-        .possible_subcommands = std.ArrayList(CommandDefinition).init(std.testing.allocator),
+        .possible_args = std.ArrayList(ArgDefinition).empty,
+        .possible_subcommands = std.ArrayList(CommandDefinition).empty,
     }};
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1113,15 +1138,15 @@ test "command_parser_parses_command_with_single_arg" {
         .withName("command")
         .withHelp("test_command")
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("file")
-        .withHelp("test arg")
-        .withType(CliType.string)
-        .isRequired(true)
-        .build())
+            .withLongName("file")
+            .withHelp("test arg")
+            .withType(CliType.string)
+            .isRequired(true)
+            .build())
         .build()};
     defer command_defs[0].deinit();
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1141,22 +1166,22 @@ test "command_parser_parses_command_with_multiple_args" {
         .withName("command")
         .withHelp("test_command")
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("file")
-        .withHelp("test arg 1")
-        .withType(CliType.string)
-        .isRequired(true)
-        .build())
+            .withLongName("file")
+            .withHelp("test arg 1")
+            .withType(CliType.string)
+            .isRequired(true)
+            .build())
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("bool")
-        .withShortName("b")
-        .withHelp("test arg 2")
-        .withType(CliType.bool)
-        .isRequired(true)
-        .build())
+            .withLongName("bool")
+            .withShortName("b")
+            .withHelp("test arg 2")
+            .withType(CliType.bool)
+            .isRequired(true)
+            .build())
         .build()};
     defer command_defs[0].deinit();
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1180,15 +1205,15 @@ test "command_parser_parses_without_non_required_arg" {
         .withName("command")
         .withHelp("test_command")
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("file")
-        .withHelp("test arg 1")
-        .withType(CliType.string)
-        .isRequired(false)
-        .build())
+            .withLongName("file")
+            .withHelp("test arg 1")
+            .withType(CliType.string)
+            .isRequired(false)
+            .build())
         .build()};
     defer command_defs[0].deinit();
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1203,14 +1228,14 @@ test "command_parser_fails_to_parse_without_required_arg" {
         .withName("command")
         .withHelp("test_command")
         .withArg(try ArgDefinitionBuilder.init()
-        .withLongName("file")
-        .withHelp("test arg 1")
-        .withType(CliType.string)
-        .isRequired(true)
-        .build())
+            .withLongName("file")
+            .withHelp("test arg 1")
+            .withType(CliType.string)
+            .isRequired(true)
+            .build())
         .build()};
     defer command_defs[0].deinit();
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
     const err = parser.parse(std.testing.allocator);
 
     try std.testing.expectEqual(err, CliParsingError.MissingRequiredArgument);
@@ -1223,13 +1248,13 @@ test "command_parser_parses_command_with_subcommand" {
         .withName("command")
         .withHelp("test_command")
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand")
-        .withHelp("test subcommand")
-        .build())
+            .withName("subcommand")
+            .withHelp("test subcommand")
+            .build())
         .build()};
     defer command_defs[0].deinit();
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1249,17 +1274,17 @@ test "command_parser_parses_command_with_multiple_subcommands" {
         .withName("command")
         .withHelp("test_command")
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand1")
-        .withHelp("test subcommand1")
-        .build())
+            .withName("subcommand1")
+            .withHelp("test subcommand1")
+            .build())
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand2")
-        .withHelp("test subcommand2")
-        .build())
+            .withName("subcommand2")
+            .withHelp("test subcommand2")
+            .build())
         .build()};
     defer command_defs[0].deinit();
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1279,17 +1304,17 @@ test "command_parser_parses_without_requiring_subcommand" {
         .withName("command")
         .withHelp("test_command")
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand1")
-        .withHelp("test subcommand1")
-        .build())
+            .withName("subcommand1")
+            .withHelp("test subcommand1")
+            .build())
         .withSubcommand(try CommandDefinitionBuilder.init(std.testing.allocator)
-        .withName("subcommand2")
-        .withHelp("test subcommand2")
-        .build())
+            .withName("subcommand2")
+            .withHelp("test subcommand2")
+            .build())
         .build()};
     defer command_defs[0].deinit();
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1304,8 +1329,8 @@ test "command_parser_ignores_unknown_subcommands" {
         .withName("command")
         .withHelp("test_command")
         .build()};
-    var parser = CommandParser.init(&offset, &cli_args, &command_defs);
-    const command = (try parser.parse(std.testing.allocator)).?;
+    var parser = CommandParser.init(std.testing.allocator, &offset, &cli_args, &command_defs);
+    var command = (try parser.parse(std.testing.allocator)).?;
     defer command.deinit();
 
     try std.testing.expectEqualStrings(command.name, "command");
@@ -1393,7 +1418,7 @@ test "end_to_end_cli_parser_test" {
     const argc1 = 7;
     var argv1: [argc1][]const u8 = [_][]const u8{ "my_test", "command", "--commandArg1", "42", "subcommand1", "--subcommand1Arg1", "-42" };
 
-    const command1 = try cli_parser.parse(std.testing.allocator, argc1, &argv1);
+    var command1 = try cli_parser.parse(std.testing.allocator, argc1, &argv1);
     defer command1.deinit();
 
     try std.testing.expectEqualStrings(command1.name, "command");
@@ -1416,7 +1441,7 @@ test "end_to_end_cli_parser_test" {
     var argv2: [argc2][]const u8 = [_][]const u8{ "my_test", "command", "subcommand2", "subcommand2subcommand1" };
 
     cli_parser.reset();
-    const command2 = try cli_parser.parse(std.testing.allocator, argc2, &argv2);
+    var command2 = try cli_parser.parse(std.testing.allocator, argc2, &argv2);
     defer command2.deinit();
 
     try std.testing.expectEqualStrings(command2.name, "command");

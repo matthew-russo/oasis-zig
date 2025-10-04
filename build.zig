@@ -15,18 +15,18 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "oasis-zig",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
+    // Create a zig module for our library
+    const oasis_module = b.addModule("oasis", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Create a zig module for our library
-    _ = b.addModule("oasis", .{
-        .root_source_file = b.path("src/root.zig"),
+    const lib = b.addLibrary(.{
+        .name = "oasis-zig",
+        // In this case the main source file is merely a path, however, in more
+        // complicated build scripts, this could be a generated file.
+        .root_module = oasis_module,
     });
 
     // const otel = b.dependency("opentelemetry_zig", .{
@@ -41,20 +41,12 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+    // Add a test step to run unit tests
+    const unit_tests = b.addTest(.{
+        .name = "oasis unit tests",
+        .root_module = oasis_module,
     });
-    // lib_unit_tests.root_module.addImport("opentelemetry-api", otel.module("opentelemetry-api"));
-
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
+    const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
+    test_step.dependOn(&run_unit_tests.step);
 }

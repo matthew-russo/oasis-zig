@@ -21,8 +21,8 @@ const TestTcpHandler = struct {
         _ = self;
         while (!read_buffer.isEmpty()) {
             var buf: [4096]u8 = undefined;
-            const amount_read = read_buffer.reader().readAll(&buf) catch unreachable;
-            _ = write_buffer.writer().writeAll(buf[0..amount_read]) catch unreachable;
+            const amount_read = read_buffer.read(&buf) catch unreachable;
+            _ = write_buffer.append(buf[0..amount_read]) catch unreachable;
         }
     }
 };

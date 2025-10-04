@@ -18,34 +18,21 @@ pub const ByteBuffer = struct {
     /// and `curr` are swapped.
     pending: std.ArrayList(u8),
 
-    pub const Writer = std.io.Writer(*ByteBuffer, anyerror, append);
-    pub const Reader = std.io.Reader(*ByteBuffer, anyerror, read);
-
     /// initialize a new ByteBuffer the provided `std.mem.Allocator`
     /// will be used to grow the internal lists
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .allocator = allocator,
             .curr_offset = 0,
-            .curr = std.ArrayList(u8).init(allocator),
-            .pending = std.ArrayList(u8).init(allocator),
+            .curr = std.ArrayList(u8).empty,
+            .pending = std.ArrayList(u8).empty,
         };
     }
 
     /// deinitialize any memory allocated in this ByteBuffer
     pub fn deinit(self: *Self) void {
-        self.curr.deinit();
-        self.pending.deinit();
-    }
-
-    /// get a `std.io.Writer` for this ByteBuffer
-    pub fn writer(self: *ByteBuffer) Writer {
-        return .{ .context = self };
-    }
-
-    /// get a `std.io.Reader` for this ByteBuffer
-    pub fn reader(self: *ByteBuffer) Reader {
-        return .{ .context = self };
+        self.curr.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
     }
 
     // get the remaining length of the ByteBuffer
@@ -65,7 +52,7 @@ pub const ByteBuffer = struct {
     /// the internal allocator is used to extend the internal `pending`
     /// list
     pub fn append(self: *Self, bytes: []const u8) anyerror!usize {
-        try self.pending.appendSlice(bytes);
+        try self.pending.appendSlice(self.allocator, bytes);
         return bytes.len;
     }
 

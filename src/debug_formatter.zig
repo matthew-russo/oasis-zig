@@ -6,6 +6,7 @@ pub const FormatStyle = enum {
 };
 
 pub const FormatContext = struct {
+    allocator: std.mem.Allocator,
     style: FormatStyle,
     indentation: u8,
     buffer: std.ArrayList(u8),
@@ -16,9 +17,10 @@ pub const DebugFormatter = struct {
 
     pub fn sprintf(allocator: std.mem.Allocator, t: anytype) !std.ArrayList(u8) {
         var ctx = FormatContext{
+            .allocator = allocator,
             .style = FormatStyle.dense,
             .indentation = 0,
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = std.ArrayList(u8).empty,
         };
         try Self.sprintfWithContext(&ctx, t);
         return ctx.buffer;
@@ -28,51 +30,51 @@ pub const DebugFormatter = struct {
         const type_info = @typeInfo(@TypeOf(t));
         switch (type_info) {
             .type => {
-                try ctx.buffer.appendSlice(@typeName(t));
+                try ctx.buffer.appendSlice(ctx.allocator, @typeName(t));
             },
             .void => {
-                try ctx.buffer.appendSlice("void");
+                try ctx.buffer.appendSlice(ctx.allocator, "void");
             },
             .bool => {
                 if (t) {
-                    try ctx.buffer.appendSlice("true");
+                    try ctx.buffer.appendSlice(ctx.allocator, "true");
                 } else {
-                    try ctx.buffer.appendSlice("false");
+                    try ctx.buffer.appendSlice(ctx.allocator, "false");
                 }
             },
             .noreturn => unreachable,
             .int => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
-                try ctx.buffer.appendSlice(actual_buf);
+                try ctx.buffer.appendSlice(ctx.allocator, actual_buf);
             },
             .float => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
-                try ctx.buffer.appendSlice(actual_buf);
+                try ctx.buffer.appendSlice(ctx.allocator, actual_buf);
             },
             .pointer => "type: pointer", // Pointer
             .array => "type: array", // Array
             .@"struct" => |struc| {
-                try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
-                try ctx.buffer.appendSlice(" { ");
+                try ctx.buffer.appendSlice(ctx.allocator, @typeName(@TypeOf(t)));
+                try ctx.buffer.appendSlice(ctx.allocator, " { ");
                 inline for (struc.fields) |field| {
-                    try ctx.buffer.appendSlice(field.name);
-                    try ctx.buffer.appendSlice(": ");
+                    try ctx.buffer.appendSlice(ctx.allocator, field.name);
+                    try ctx.buffer.appendSlice(ctx.allocator, ": ");
                     try Self.sprintfWithContext(ctx, @field(t, field.name));
-                    try ctx.buffer.appendSlice(", ");
+                    try ctx.buffer.appendSlice(ctx.allocator, ", ");
                 }
-                try ctx.buffer.appendSlice("}");
+                try ctx.buffer.appendSlice(ctx.allocator, "}");
             },
             .comptime_float => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
-                try ctx.buffer.appendSlice(actual_buf);
+                try ctx.buffer.appendSlice(ctx.allocator, actual_buf);
             },
             .comptime_int => {
                 var buf: [256]u8 = undefined;
                 const actual_buf = try std.fmt.bufPrint(&buf, "{}", .{t});
-                try ctx.buffer.appendSlice(actual_buf);
+                try ctx.buffer.appendSlice(ctx.allocator, actual_buf);
             },
             .undefined => unreachable,
             .null => unreachable,
@@ -80,16 +82,16 @@ pub const DebugFormatter = struct {
             .error_union => "TODO: type: error_union", // ErrorUnion
             .error_set => "TODO: type: error_set", // ErrorSet
             .@"enum" => |_| {
-                try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
-                try ctx.buffer.appendSlice(".");
-                try ctx.buffer.appendSlice(@tagName(t));
+                try ctx.buffer.appendSlice(ctx.allocator, @typeName(@TypeOf(t)));
+                try ctx.buffer.appendSlice(ctx.allocator, ".");
+                try ctx.buffer.appendSlice(ctx.allocator, @tagName(t));
             },
             .@"union" => |unio| {
                 if (unio.tag_type) |_| {
-                    try ctx.buffer.appendSlice(@typeName(@TypeOf(t)));
-                    try ctx.buffer.appendSlice(" { .");
-                    try ctx.buffer.appendSlice(@tagName(t));
-                    try ctx.buffer.appendSlice(": ");
+                    try ctx.buffer.appendSlice(ctx.allocator, @typeName(@TypeOf(t)));
+                    try ctx.buffer.appendSlice(ctx.allocator, " { .");
+                    try ctx.buffer.appendSlice(ctx.allocator, @tagName(t));
+                    try ctx.buffer.appendSlice(ctx.allocator, ": ");
 
                     inline for (unio.fields, 0..) |field, i| {
                         if (@intFromEnum(t) == i) {
@@ -98,7 +100,7 @@ pub const DebugFormatter = struct {
                         }
                     }
 
-                    try ctx.buffer.appendSlice(" }");
+                    try ctx.buffer.appendSlice(ctx.allocator, " }");
                 } else {
                     std.debug.panic("its impossible to format an untagged union as it cannot be known what field is active", .{});
                 }
@@ -125,11 +127,11 @@ test "expect DebugFormatter to work with types" {
 
     var output = try DebugFormatter.sprintf(std.testing.allocator, u64_type);
     std.debug.assert(std.mem.eql(u8, output.items, "u64"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     output = try DebugFormatter.sprintf(std.testing.allocator, struct_type);
     std.debug.assert(std.mem.eql(u8, output.items, "debug_formatter.test.expect DebugFormatter to work with types.MyStruct"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with void" {
@@ -137,79 +139,79 @@ test "expect DebugFormatter to work with void" {
 
     var output = try DebugFormatter.sprintf(std.testing.allocator, void_value);
     std.debug.assert(std.mem.eql(u8, output.items, "void"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with bools" {
     var output = try DebugFormatter.sprintf(std.testing.allocator, true);
     std.debug.assert(std.mem.eql(u8, output.items, "true"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     output = try DebugFormatter.sprintf(std.testing.allocator, false);
     std.debug.assert(std.mem.eql(u8, output.items, "false"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with ints" {
     const u: u32 = 42;
     var output = try DebugFormatter.sprintf(std.testing.allocator, u);
     std.debug.assert(std.mem.eql(u8, output.items, "42"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     const i: i32 = -73;
     output = try DebugFormatter.sprintf(std.testing.allocator, i);
     std.debug.assert(std.mem.eql(u8, output.items, "-73"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     const uu: u64 = 2890409822222;
     output = try DebugFormatter.sprintf(std.testing.allocator, uu);
     std.debug.assert(std.mem.eql(u8, output.items, "2890409822222"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with floats" {
     const u: f32 = 42.42;
     var output = try DebugFormatter.sprintf(std.testing.allocator, u);
-    std.debug.assert(std.mem.eql(u8, output.items, "4.242e1"));
-    output.deinit();
+    std.debug.assert(std.mem.eql(u8, output.items, "42.42"));
+    output.deinit(std.testing.allocator);
 
     const i: f32 = -73.73;
     output = try DebugFormatter.sprintf(std.testing.allocator, i);
-    std.debug.assert(std.mem.eql(u8, output.items, "-7.373e1"));
-    output.deinit();
+    std.debug.assert(std.mem.eql(u8, output.items, "-73.73"));
+    output.deinit(std.testing.allocator);
 
     const uu: f64 = 2890409822222.2394820;
     output = try DebugFormatter.sprintf(std.testing.allocator, uu);
-    std.debug.assert(std.mem.eql(u8, output.items, "2.8904098222222393e12"));
-    output.deinit();
+    std.debug.assert(std.mem.eql(u8, output.items, "2890409822222.2393"));
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with comptime ints" {
     var output = try DebugFormatter.sprintf(std.testing.allocator, 42);
     std.debug.assert(std.mem.eql(u8, output.items, "42"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     output = try DebugFormatter.sprintf(std.testing.allocator, -73);
     std.debug.assert(std.mem.eql(u8, output.items, "-73"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     output = try DebugFormatter.sprintf(std.testing.allocator, 2890409822222);
     std.debug.assert(std.mem.eql(u8, output.items, "2890409822222"));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with comptime floats" {
     var output = try DebugFormatter.sprintf(std.testing.allocator, 42.42);
-    std.debug.assert(std.mem.eql(u8, output.items, "4.242e1"));
-    output.deinit();
+    std.debug.assert(std.mem.eql(u8, output.items, "42.42"));
+    output.deinit(std.testing.allocator);
 
     output = try DebugFormatter.sprintf(std.testing.allocator, -73.73);
-    std.debug.assert(std.mem.eql(u8, output.items, "-7.373e1"));
-    output.deinit();
+    std.debug.assert(std.mem.eql(u8, output.items, "-73.73"));
+    output.deinit(std.testing.allocator);
 
     output = try DebugFormatter.sprintf(std.testing.allocator, 2890409822222.2394820);
-    std.debug.assert(std.mem.eql(u8, output.items, "2.890409822222239482e12"));
-    output.deinit();
+    std.debug.assert(std.mem.eql(u8, output.items, "2890409822222.239482"));
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with basic structs" {
@@ -225,13 +227,13 @@ test "expect DebugFormatter to work with basic structs" {
         .c = true,
     };
 
-    const output = try DebugFormatter.sprintf(std.testing.allocator, my_struct);
+    var output = try DebugFormatter.sprintf(std.testing.allocator, my_struct);
     std.debug.assert(std.mem.eql(
         u8,
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with basic structs.MyStruct { a: 42, b: 2934092390498, c: true, }",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with composite structs" {
@@ -253,13 +255,13 @@ test "expect DebugFormatter to work with composite structs" {
         },
     };
 
-    const output = try DebugFormatter.sprintf(std.testing.allocator, my_struct);
+    var output = try DebugFormatter.sprintf(std.testing.allocator, my_struct);
     std.debug.assert(std.mem.eql(
         u8,
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with composite structs.MyStruct { a: 42, inner: debug_formatter.test.expect DebugFormatter to work with composite structs.InnerStruct { b: 2934092390498, c: true, }, }",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with enums" {
@@ -276,7 +278,7 @@ test "expect DebugFormatter to work with enums" {
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with enums.MyEnum.hundred",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     my_enum = MyEnum.thousand;
     output = try DebugFormatter.sprintf(std.testing.allocator, my_enum);
@@ -285,7 +287,7 @@ test "expect DebugFormatter to work with enums" {
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with enums.MyEnum.thousand",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     my_enum = MyEnum.million;
     output = try DebugFormatter.sprintf(std.testing.allocator, my_enum);
@@ -294,7 +296,7 @@ test "expect DebugFormatter to work with enums" {
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with enums.MyEnum.million",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }
 
 test "expect DebugFormatter to work with tagged unions" {
@@ -317,7 +319,7 @@ test "expect DebugFormatter to work with tagged unions" {
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with tagged unions.MyTaggedUnion { .void_value: void }",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     my_tagged_union = MyTaggedUnion{ .u64_value = 90823409 };
     output = try DebugFormatter.sprintf(std.testing.allocator, my_tagged_union);
@@ -326,7 +328,7 @@ test "expect DebugFormatter to work with tagged unions" {
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with tagged unions.MyTaggedUnion { .u64_value: 90823409 }",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 
     my_tagged_union = MyTaggedUnion{ .struct_value = MyStruct{ .a = 42, .b = -73, .c = true } };
     output = try DebugFormatter.sprintf(std.testing.allocator, my_tagged_union);
@@ -335,5 +337,5 @@ test "expect DebugFormatter to work with tagged unions" {
         output.items,
         "debug_formatter.test.expect DebugFormatter to work with tagged unions.MyTaggedUnion { .struct_value: debug_formatter.test.expect DebugFormatter to work with tagged unions.MyStruct { a: 42, b: -73, c: true, } }",
     ));
-    output.deinit();
+    output.deinit(std.testing.allocator);
 }

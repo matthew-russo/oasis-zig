@@ -177,10 +177,10 @@ pub const Uuid = struct {
         return Self{ .msb = msb, .lsb = lsb };
     }
 
-    pub fn parse(allocator: std.mem.Allocator, msg_reader: *std.io.FixedBufferStream([]const u8).Reader) !Self {
+    pub fn parse(allocator: std.mem.Allocator, msg_reader: *std.Io.Reader) !Self {
         _ = allocator;
-        const msb = try msg_reader.readInt(u64, std.builtin.Endian.big);
-        const lsb = try msg_reader.readInt(u64, std.builtin.Endian.big);
+        const msb = try msg_reader.takeInt(u64, std.builtin.Endian.big);
+        const lsb = try msg_reader.takeInt(u64, std.builtin.Endian.big);
         return Self{
             .msb = msb,
             .lsb = lsb,
@@ -192,19 +192,15 @@ pub const Uuid = struct {
         return 16;
     }
 
-    pub fn write(self: Self, writer: *std.net.Stream.Writer) !void {
+    pub fn write(self: Self, writer: *std.Io.Writer) !void {
         try writer.writeInt(u64, self.msb, std.builtin.Endian.big);
         try writer.writeInt(u64, self.lsb, std.builtin.Endian.big);
     }
 
     pub fn format(
         self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
+        writer: *std.Io.Writer,
     ) !void {
-        _ = fmt;
-        _ = options;
         try writer.print("{s}", .{self.toString()});
     }
 
