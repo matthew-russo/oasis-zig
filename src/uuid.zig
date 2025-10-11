@@ -187,14 +187,15 @@ pub const Uuid = struct {
         };
     }
 
-    pub fn size(self: *const Self) i32 {
+    pub fn size(self: *const Self) usize {
         _ = self;
         return 16;
     }
 
-    pub fn write(self: Self, writer: *std.Io.Writer) !void {
+    pub fn write(self: Self, writer: *std.Io.Writer) !usize {
         try writer.writeInt(u64, self.msb, std.builtin.Endian.big);
         try writer.writeInt(u64, self.lsb, std.builtin.Endian.big);
+        return self.size();
     }
 
     pub fn format(
