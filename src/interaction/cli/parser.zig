@@ -509,7 +509,7 @@ pub const CommandParser = struct {
 
             // 3. chomp subcommand if available
             var subcommand_parser = CommandParser.init(
-                std.testing.allocator,
+                allocator,
                 self.offset,
                 self.cli_args,
                 target_command_def.possible_subcommands.items,
@@ -636,7 +636,7 @@ pub const CliApp = struct {
             return CliParsingError.MissingCommand;
         }
 
-        var parser = CommandParser.init(std.testing.allocator, &self.offset, argv[1..], self.possible_commands.items);
+        var parser = CommandParser.init(allocator, &self.offset, argv[1..], self.possible_commands.items);
 
         const maybe_subcommand = try parser.parse(allocator);
 
