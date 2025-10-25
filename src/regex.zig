@@ -376,6 +376,11 @@ pub fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
                 node.* = RegexNode{ .literal = c };
                 break :blk node;
             },
+            .dot => blk: {
+                const node = try allocator.create(RegexNode);
+                node.* = RegexNode{ .dot = {} };
+                break :blk node;
+            },
             .escaped => |c| blk: {
                 if (c == 'w') {
                     // \w = [a-zA-Z0-9_]
@@ -710,4 +715,32 @@ test "regex '\\d?' matches '5'" {
 
 test "regex '\\d?' matches ''" {
     try test_regex("\\d?", "", true);
+}
+
+test "regex 'd.g' matches 'dog'" {
+    try test_regex("d.g", "dog", true);
+}
+
+test "regex 'd.g' matches 'dag'" {
+    try test_regex("d.g", "dag", true);
+}
+
+test "regex 'd.g' matches 'd9g'" {
+    try test_regex("d.g", "d9g", true);
+}
+
+test "regex 'd.g' does not match 'cog'" {
+    try test_regex("d.g", "cog", false);
+}
+
+test "regex 'd.g' does not match 'dg'" {
+    try test_regex("d.g", "dg", false);
+}
+
+test "regex '...' matches 'cat'" {
+    try test_regex("...", "cat", true);
+}
+
+test "regex '.\\d.' matches 'a1b'" {
+    try test_regex(".\\d.", "a1b", true);
 }
