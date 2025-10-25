@@ -146,6 +146,116 @@ pub const RegexNode = union(enum) {
         }
     }
 
+    pub fn evaluate(self: *const Self, cursor: *RegexCursor) RegexEvaluationInternal {
+        std.log.debug("Evaluating {f} against '{s}'", .{ self.*, cursor.input[cursor.current..] });
+        // while (cursor.current <= cursor.input.len) {
+        switch (self.*) {
+            .literal => |lit| {
+                if (cursor.current >= cursor.input.len) {
+                    return RegexEvaluationInternal{ .matches = false };
+                }
+                if (cursor.input[cursor.current] == lit) {
+                    cursor.current += 1;
+                    return RegexEvaluationInternal{ .matches = true };
+                }
+            },
+            .dot => {
+                if (cursor.current < cursor.input.len) {
+                    cursor.current += 1;
+                    return RegexEvaluationInternal{ .matches = true };
+                }
+            },
+            .character_class => |class| {
+                for (cursor.input[cursor.current..]) |c| {
+                    var matched = false;
+                    for (class.characters) |cc| {
+                        switch (cc) {
+                            .char => |ch| {
+                                if (c == ch) matched = true;
+                            },
+                            .range => |r| {
+                                if (c >= r.start and c <= r.end) matched = true;
+                            },
+                        }
+                        if (matched) break;
+                    }
+                    if (class.negated) {
+                        if (!matched) {
+                            cursor.current += 1;
+                            return RegexEvaluationInternal{ .matches = true };
+                        }
+                    } else {
+                        if (matched) {
+                            cursor.current += 1;
+                            return RegexEvaluationInternal{ .matches = true };
+                        }
+                    }
+                }
+            },
+            .start_of_line_anchor => {
+                if (cursor.current == 0 or cursor.input[cursor.current - 1] == '\n') {
+                    return RegexEvaluationInternal{ .matches = true };
+                } else {
+                    return RegexEvaluationInternal{ .matches = false };
+                }
+            },
+            .end_of_line_anchor => {
+                std.log.debug("At end_of_line_anchor, cursor.current={d}, input.len={d}, next char='{c}'", .{ cursor.current, cursor.input.len, if (cursor.current < cursor.input.len) cursor.input[cursor.current] else '?' });
+                if (cursor.current == cursor.input.len or cursor.input[cursor.current] == '\n') {
+                    return RegexEvaluationInternal{ .matches = true };
+                } else {
+                    return RegexEvaluationInternal{ .matches = false };
+                }
+            },
+            .sequence => |nodes| {
+                for (nodes) |node| {
+                    const cursor_before = cursor.*;
+                    const evaluation = node.evaluate(cursor);
+                    std.log.debug("Evaluating node: {f}, Cursor before: {f}, Cursor after: {f}, Result: {}", .{ node, cursor_before, cursor, evaluation.matches });
+
+                    if (!evaluation.matches) {
+                        return RegexEvaluationInternal{ .matches = false };
+                    }
+                }
+                return RegexEvaluationInternal{ .matches = true };
+            },
+            .alternation => |nodes| {
+                for (nodes) |node| {
+                    const evaluation = node.evaluate(cursor);
+                    if (evaluation.matches) return evaluation;
+                }
+            },
+            .quantified => |q| {
+                std.log.debug("Evaluating '{s}' against Quantified min={d}, max={?d}, greedy={}, node={f}", .{ cursor.input[cursor.current..], q.quantifier.min, q.quantifier.max, q.quantifier.greedy, q.node });
+                if (!q.quantifier.greedy) {
+                    std.debug.panic("TODO: impl non-greedy quantifiers", .{});
+                }
+                var i: usize = 0;
+                while (true) {
+                    if (q.quantifier.max) |max| {
+                        if (i >= max) {
+                            break;
+                        }
+                    }
+                    const evaluation = q.node.evaluate(cursor);
+                    if (evaluation.matches) {
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if (i < q.quantifier.min) {
+                    return RegexEvaluationInternal{ .matches = false };
+                } else {
+                    return RegexEvaluationInternal{ .matches = true };
+                }
+            },
+        }
+        return RegexEvaluationInternal{ .matches = false };
+        // }
+        // return RegexEvaluationInternal{ .matches = false };
+    }
+
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .literal => {},
@@ -184,9 +294,25 @@ pub const Regex = struct {
     root: *RegexNode,
 
     pub fn matches(self: *const Self, input: []const u8) bool {
-        _ = self;
-        _ = input;
-        std.debug.panic("TODO: impl Regex.matches", .{});
+        var i: usize = 0;
+        while (true) {
+            std.log.debug("Trying to match string '{s}' against regex: {f}", .{ input[i..], self.root });
+            var cursor = RegexCursor{
+                .input = input,
+                .current = i,
+            };
+            const evaluation = self.root.evaluate(&cursor);
+
+            if (evaluation.matches) {
+                return true;
+            } else {
+                i += 1;
+            }
+
+            if (i > input.len) {
+                return false;
+            }
+        }
     }
 
     pub fn format(self: Self, writer: *std.Io.Writer) !void {
@@ -386,4 +512,202 @@ pub fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
             .root = seq_node,
         };
     }
+}
+
+const RegexEvaluationInternal = struct {
+    const Self = @This();
+
+    matches: bool,
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("RegexEvaluationInternal{{ .matches={} }}", .{self.matches});
+    }
+};
+
+fn test_regex(pattern: []const u8, input: []const u8, expect_matches: bool) !void {
+    const allocator = std.testing.allocator;
+
+    const tokens = try tokenize(allocator, pattern);
+    defer allocator.free(tokens.tokens);
+
+    const regex = try parse_tokens(allocator, tokens);
+    defer regex.deinit();
+
+    try std.testing.expect(regex.matches(input) == expect_matches);
+}
+
+test "regex 'd' matches dog" {
+    try test_regex("d", "dog", true);
+}
+
+test "regex 'f' does not match dog" {
+    try test_regex("f", "dog", false);
+}
+
+test "regex '\\d' matches 123" {
+    try test_regex("\\d", "123", true);
+}
+
+test "regex '\\d' does not match apple" {
+    try test_regex("\\d", "apple", false);
+}
+
+test "regex '\\w' matches banana" {
+    try test_regex("\\w", "banana", true);
+}
+
+test "regex '\\w' matches PINEAPPLE" {
+    try test_regex("\\w", "PINEAPPLE", true);
+}
+
+test "regex '\\w' matches 296" {
+    try test_regex("\\w", "296", true);
+}
+
+test "regex '\\w' matches ×-#_×%=" {
+    try test_regex("\\w", "×-#_×%=", true);
+}
+
+test "regex '\\w' does not match +#=-÷%" {
+    try test_regex("\\w", "+#=-÷%", false);
+}
+
+test "regex '[abc]' matches 'apple'" {
+    try test_regex("[abc]", "apple", true);
+}
+
+test "regex '[abc]' does not match 'dog'" {
+    try test_regex("[abc]", "dog", false);
+}
+
+test "regex '[^abc]' matches 'cat'" {
+    try test_regex("[^abc]", "cat", true);
+}
+
+test "regex '[^abc]' does not match 'cab'" {
+    try test_regex("[^abc]", "cab", false);
+}
+
+test "regex '\\d apple' matches '1 apple'" {
+    try test_regex("\\d apple", "1 apple", true);
+}
+
+test "regex '\\d apple' does not match '1 orange'" {
+    try test_regex("\\d apple", "1 orange", false);
+}
+
+test "regex '\\d\\d\\d apple' matches '100 apples'" {
+    try test_regex("\\d\\d\\d apple", "100 apples", true);
+}
+
+test "regex '\\d\\d\\d apple' does not match '1 apple'" {
+    try test_regex("\\d\\d\\d apple", "1 apple", false);
+}
+
+test "regex '\\d \\w\\w\\ws' matches '3 dogs'" {
+    try test_regex("\\d \\w\\w\\ws", "3 dogs", true);
+}
+
+test "regex '\\d \\w\\w\\ws' matches '4 cats'" {
+    try test_regex("\\d \\w\\w\\ws", "4 cats", true);
+}
+
+test "regex '\\d \\w\\w\\ws' does not match '1 dog'" {
+    try test_regex("\\d \\w\\w\\ws", "1 dog", false);
+}
+
+test "regex '^log' matches 'log'" {
+    try test_regex("^log", "log", true);
+}
+
+test "regex '^log' matches 'logs'" {
+    try test_regex("^log", "logs", true);
+}
+
+test "regex '^log' does not match 'slog'" {
+    try test_regex("^log", "slog", false);
+}
+
+test "regex '^\\d\\d\\d' matches '123abc'" {
+    try test_regex("^\\d\\d\\d", "123abc", true);
+}
+
+test "regex 'dog$' matches 'dog'" {
+    try test_regex("dog$", "dog", true);
+}
+
+test "regex 'dog$' matches 'hotdog'" {
+    try test_regex("dog$", "hotdog", true);
+}
+
+test "regex '\\d\\d\\d$' matches 'abc123'" {
+    try test_regex("\\d\\d\\d$", "abc123", true);
+}
+
+test "regex '\\w\\w\\w$' does not match 'abc123@'" {
+    try test_regex("\\w\\w\\w$", "abc123@", false);
+}
+
+test "regex '\\w\\w\\w$' matches 'abc123cde'" {
+    try test_regex("\\w\\w\\w$", "abc123cde", true);
+}
+
+test "regex 'a+' matches 'apple'" {
+    try test_regex("a+", "apple", true);
+}
+
+test "regex 'a+' matches 'SaaS'" {
+    try test_regex("a+", "SaaS", true);
+}
+
+test "regex 'a+' does not match 'dog'" {
+    try test_regex("a+", "dog", false);
+}
+
+test "regex 'ca+ts' matches 'cats'" {
+    try test_regex("ca+ts", "cats", true);
+}
+
+test "regex 'ca+ts' matches 'caats'" {
+    try test_regex("ca+ts", "caats", true);
+}
+
+test "regex 'ca+ts' does not match 'cts'" {
+    try test_regex("ca+ts", "cts", false);
+}
+
+test "regex '\\d+' matches '123'" {
+    try test_regex("\\d+", "123", true);
+}
+
+test "regex 'dogs?' matches 'dog'" {
+    try test_regex("dogs?", "dog", true);
+}
+
+test "regex 'dogs?' matches 'dogs'" {
+    try test_regex("dogs?", "dogs", true);
+}
+
+test "regex 'dogs?$' does not match 'dogss'" {
+    try test_regex("dogs?$", "dogss", false);
+}
+
+test "regex 'dogs?' does not match 'cat'" {
+    try test_regex("dogs?", "cat", false);
+}
+
+test "regex 'colou?r' matches 'color'" {
+    try test_regex("colou?r", "color", true);
+}
+
+test "regex 'colou?r' matches 'colour'" {
+    try test_regex("colou?r", "colour", true);
+}
+
+test "regex '\\d?' matches '5'" {
+    try test_regex("\\d?", "5", true);
+}
+
+test "regex '\\d?' matches ''" {
+    try test_regex("\\d?", "", true);
 }
