@@ -5,6 +5,7 @@ pub const debug_formatter = @import("debug_formatter.zig");
 pub const interaction = @import("interaction/mod.zig");
 pub const net = @import("net/mod.zig");
 pub const os = @import("os/mod.zig");
+pub const regex = @import("regex.zig");
 pub const time = @import("time.zig");
 pub const uuid = @import("uuid.zig");
 
