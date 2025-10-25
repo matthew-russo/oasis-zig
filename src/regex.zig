@@ -99,6 +99,8 @@ pub const RegexCharacterClass = struct {
 };
 
 pub const RegexQuantifier = struct {
+    const Self = @This();
+
     min: usize,
     max: ?usize, // null means unbounded
     greedy: bool,
@@ -114,153 +116,34 @@ pub const RegexNode = union(enum) {
     end_of_line_anchor: void,
     sequence: []*RegexNode,
     alternation: []*RegexNode,
-    quantified: struct {
-        node: *RegexNode,
-        quantifier: RegexQuantifier,
-    },
+    quantified: struct { node: *RegexNode, quantifier: RegexQuantifier },
 
     pub fn format(self: Self, writer: *std.Io.Writer) !void {
         switch (self) {
             .literal => |lit| try writer.print("Literal({c})", .{lit}),
             .dot => try writer.print("Dot", .{}),
-            .character_class => |class| {
-                try writer.print("{f}", .{class});
-            },
+            .character_class => |class| try writer.print("{f}", .{class}),
             .start_of_line_anchor => try writer.print("StartOfLineAnchor", .{}),
             .end_of_line_anchor => try writer.print("EndOfLineAnchor", .{}),
             .sequence => |nodes| {
                 try writer.print("Sequence {{ .nodes=[", .{});
-                for (nodes) |node| {
-                    try writer.print("{f}, ", .{node});
-                }
+                for (nodes) |node| try writer.print("{f}, ", .{node});
                 try writer.print("] }}", .{});
             },
             .alternation => |nodes| {
                 try writer.print("Alternation {{ .nodes=[", .{});
-                for (nodes) |node| {
-                    try writer.print("{f}, ", .{node});
-                }
+                for (nodes) |node| try writer.print("{f}, ", .{node});
                 try writer.print("] }}", .{});
             },
             .quantified => |q| try writer.print("Quantified {{ min={d}, max={?d}, node={f} }}", .{ q.quantifier.min, q.quantifier.max, q.node }),
         }
     }
 
-    pub fn evaluate(self: *const Self, cursor: *RegexCursor) RegexEvaluationInternal {
-        std.log.debug("Evaluating '{s}' against {f}", .{ cursor.input[cursor.current..], self.* });
-        // while (cursor.current <= cursor.input.len) {
-        switch (self.*) {
-            .literal => |lit| {
-                if (cursor.current >= cursor.input.len) {
-                    return RegexEvaluationInternal{ .matches = false };
-                }
-                if (cursor.input[cursor.current] == lit) {
-                    cursor.current += 1;
-                    return RegexEvaluationInternal{ .matches = true };
-                }
-            },
-            .dot => {
-                if (cursor.current < cursor.input.len) {
-                    cursor.current += 1;
-                    return RegexEvaluationInternal{ .matches = true };
-                }
-            },
-            .character_class => |class| {
-                for (cursor.input[cursor.current..]) |c| {
-                    var matched = false;
-                    for (class.characters) |cc| {
-                        switch (cc) {
-                            .char => |ch| {
-                                if (c == ch) matched = true;
-                            },
-                            .range => |r| {
-                                if (c >= r.start and c <= r.end) matched = true;
-                            },
-                        }
-                        if (matched) break;
-                    }
-                    if (class.negated) {
-                        if (!matched) {
-                            cursor.current += 1;
-                            return RegexEvaluationInternal{ .matches = true };
-                        }
-                    } else {
-                        if (matched) {
-                            cursor.current += 1;
-                            return RegexEvaluationInternal{ .matches = true };
-                        }
-                    }
-                }
-            },
-            .start_of_line_anchor => {
-                if (cursor.current == 0 or cursor.input[cursor.current - 1] == '\n') {
-                    return RegexEvaluationInternal{ .matches = true };
-                } else {
-                    return RegexEvaluationInternal{ .matches = false };
-                }
-            },
-            .end_of_line_anchor => {
-                std.log.debug("At end_of_line_anchor, cursor.current={d}, input.len={d}, next char='{c}'", .{ cursor.current, cursor.input.len, if (cursor.current < cursor.input.len) cursor.input[cursor.current] else '?' });
-                if (cursor.current == cursor.input.len or cursor.input[cursor.current] == '\n') {
-                    return RegexEvaluationInternal{ .matches = true };
-                } else {
-                    return RegexEvaluationInternal{ .matches = false };
-                }
-            },
-            .sequence => |nodes| {
-                for (nodes) |node| {
-                    const cursor_before = cursor.*;
-                    const evaluation = node.evaluate(cursor);
-                    std.log.debug("Evaluating node: {f}, Cursor before: {f}, Cursor after: {f}, Result: {}", .{ node, cursor_before, cursor, evaluation.matches });
-
-                    if (!evaluation.matches) {
-                        return RegexEvaluationInternal{ .matches = false };
-                    }
-                }
-                return RegexEvaluationInternal{ .matches = true };
-            },
-            .alternation => |nodes| {
-                for (nodes) |node| {
-                    const evaluation = node.evaluate(cursor);
-                    if (evaluation.matches) return evaluation;
-                }
-            },
-            .quantified => |q| {
-                std.log.debug("Evaluating '{s}' against Quantified min={d}, max={?d}, greedy={}, node={f}", .{ cursor.input[cursor.current..], q.quantifier.min, q.quantifier.max, q.quantifier.greedy, q.node });
-                if (!q.quantifier.greedy) {
-                    std.debug.panic("TODO: impl non-greedy quantifiers", .{});
-                }
-                var i: usize = 0;
-                while (true) {
-                    if (q.quantifier.max) |max| {
-                        if (i >= max) {
-                            break;
-                        }
-                    }
-                    const evaluation = q.node.evaluate(cursor);
-                    if (evaluation.matches) {
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-                if (i < q.quantifier.min) {
-                    return RegexEvaluationInternal{ .matches = false };
-                } else {
-                    return RegexEvaluationInternal{ .matches = true };
-                }
-            },
-        }
-        return RegexEvaluationInternal{ .matches = false };
-    }
-
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .literal => {},
             .dot => {},
-            .character_class => |class| {
-                allocator.free(class.characters);
-            },
+            .character_class => |class| allocator.free(class.characters),
             .start_of_line_anchor => {},
             .end_of_line_anchor => {},
             .sequence => |nodes| {
@@ -282,44 +165,6 @@ pub const RegexNode = union(enum) {
                 allocator.destroy(q.node);
             },
         }
-    }
-};
-
-pub const Regex = struct {
-    const Self = @This();
-
-    allocator: std.mem.Allocator,
-    root: *RegexNode,
-
-    pub fn matches(self: *const Self, input: []const u8) bool {
-        var i: usize = 0;
-        while (true) {
-            std.log.debug("Trying to match string '{s}' against regex: {f}", .{ input[i..], self.root });
-            var cursor = RegexCursor{
-                .input = input,
-                .current = i,
-            };
-            const evaluation = self.root.evaluate(&cursor);
-
-            if (evaluation.matches) {
-                return true;
-            } else {
-                i += 1;
-            }
-
-            if (i > input.len) {
-                return false;
-            }
-        }
-    }
-
-    pub fn format(self: Self, writer: *std.Io.Writer) !void {
-        try writer.print("{f}", .{self.root});
-    }
-
-    pub fn deinit(self: *const Self) void {
-        self.root.deinit(self.allocator);
-        self.allocator.destroy(self.root);
     }
 };
 
@@ -347,14 +192,10 @@ pub fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !RegexTokens 
             ')' => try tokens.append(allocator, RegexToken.close_paren),
             '\\' => {
                 i += 1;
-                if (i >= pattern.len) {
-                    return error.InvalidEscapeSequence;
-                }
+                if (i >= pattern.len) return error.InvalidEscapeSequence;
                 try tokens.append(allocator, RegexToken{ .escaped = pattern[i] });
             },
-            else => {
-                try tokens.append(allocator, RegexToken{ .literal = pattern[i] });
-            },
+            else => try tokens.append(allocator, RegexToken{ .literal = pattern[i] }),
         }
     }
 
@@ -410,7 +251,7 @@ fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize
                     var char_list = std.ArrayList(RegexCharacter).empty;
                     defer char_list.deinit(allocator);
 
-                    i.* += 1; // consume '['
+                    i.* += 1;
                     var negated = false;
                     if (i.* < len and tokens.tokens[i.*] == RegexToken.caret) {
                         negated = true;
@@ -420,13 +261,12 @@ fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize
                     while (i.* < len and tokens.tokens[i.*] != RegexToken.close_square_bracket) {
                         switch (tokens.tokens[i.*]) {
                             .literal => |c| {
-                                // range handling e.g. [a-z]
                                 if (i.* + 2 < len and tokens.tokens[i.* + 1] == RegexToken.dash and tokens.tokens[i.* + 2] == RegexToken.literal) {
                                     const start = c;
                                     const end = tokens.tokens[i.* + 2].literal;
                                     try char_list.append(allocator, RegexCharacter{ .range = .{ .start = start, .end = end } });
-                                    i.* += 3; // consume start, '-', end
-                                    continue; // continue main loop without extra i increment
+                                    i.* += 3;
+                                    continue;
                                 } else {
                                     try char_list.append(allocator, RegexCharacter{ .char = c });
                                 }
@@ -448,71 +288,52 @@ fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize
                         i.* += 1;
                     }
 
-                    if (i.* >= len or tokens.tokens[i.*] != RegexToken.close_square_bracket) {
-                        return error.UnclosedCharacterClass;
-                    }
-
+                    if (i.* >= len or tokens.tokens[i.*] != RegexToken.close_square_bracket) return error.UnclosedCharacterClass;
                     const class = RegexCharacterClass{ .negated = negated, .characters = try char_list.toOwnedSlice(allocator) };
                     atom = try allocator.create(RegexNode);
                     atom.* = RegexNode{ .character_class = class };
-
-                    i.* += 1; // consume ']'
+                    i.* += 1;
                 },
                 .caret => {
                     atom = try allocator.create(RegexNode);
                     atom.* = RegexNode{ .start_of_line_anchor = {} };
-                    i.* += 1; // consume '^'
+                    i.* += 1;
                 },
                 .dollar_sign => {
                     atom = try allocator.create(RegexNode);
                     atom.* = RegexNode{ .end_of_line_anchor = {} };
-                    i.* += 1; // consume '$'
+                    i.* += 1;
                 },
                 .open_paren => {
-                    // group handling: ['(', Alternation, ')']
                     i.* += 1; // consume '('
                     atom = try parse_expression(allocator, tokens, i);
-                    if (i.* >= len or tokens.tokens[i.*] != RegexToken.close_paren) {
-                        return error.UnclosedParenthesis;
-                    }
+                    if (i.* >= len or tokens.tokens[i.*] != RegexToken.close_paren) return error.UnclosedParenthesis;
                     i.* += 1; // consume ')'
                 },
                 else => return error.UnsupportedToken,
             }
 
-            // parse quantifiers, if present
+            // quantifiers
             if (i.* < len) {
                 const qtok = tokens.tokens[i.*];
                 switch (qtok) {
                     .star => {
                         const qn = try allocator.create(RegexNode);
-                        qn.* = RegexNode{ .quantified = .{
-                            .node = atom,
-                            .quantifier = RegexQuantifier{ .min = 0, .max = null, .greedy = true },
-                        } };
+                        qn.* = RegexNode{ .quantified = .{ .node = atom, .quantifier = RegexQuantifier{ .min = 0, .max = null, .greedy = true } } };
                         atom = qn;
-                        i.* += 1; // consume '*'
+                        i.* += 1;
                     },
                     .plus => {
                         const qn = try allocator.create(RegexNode);
-                        qn.* = RegexNode{ .quantified = .{
-                            .node = atom,
-                            .quantifier = RegexQuantifier{ .min = 1, .max = null, .greedy = true },
-                        } };
+                        qn.* = RegexNode{ .quantified = .{ .node = atom, .quantifier = RegexQuantifier{ .min = 1, .max = null, .greedy = true } } };
                         atom = qn;
-                        i.* += 1; // consume '+'
+                        i.* += 1;
                     },
                     .question_mark => {
                         const qn = try allocator.create(RegexNode);
-                        qn.* = RegexNode{ .quantified = .{
-                            .node = atom,
-                            .quantifier = RegexQuantifier{ .min = 0, .max = 1, .greedy = true },
-                        } };
+                        qn.* = RegexNode{ .quantified = .{ .node = atom, .quantifier = RegexQuantifier{ .min = 0, .max = 1, .greedy = true } } };
                         atom = qn;
-                        i.* += 1; // consume '?'
-                    },
-                    .open_curly_bracket => {
-                        std.debug.panic("TODO: impl specific quantifiers", .{});
+                        i.* += 1;
                     },
                     else => {},
                 }
@@ -533,52 +354,211 @@ fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize
             try alternatives.append(allocator, seq_node);
         }
 
-        // if next token is '|', consume it and parse the next alternative
         if (i.* < len and tokens.tokens[i.*] == RegexToken.pipe) {
-            i.* += 1; // consume '|'
+            i.* += 1;
             continue;
-        } else {
-            break;
-        }
+        } else break;
     }
 
-    // build alternation node if needed
-    if (alternatives.items.len == 1) {
-        return alternatives.items[0];
-    } else {
-        const alt_node = try allocator.create(RegexNode);
-        alt_node.* = RegexNode{ .alternation = try alternatives.toOwnedSlice(allocator) };
-        return alt_node;
-    }
+    if (alternatives.items.len == 1) return alternatives.items[0];
+    const alt_node = try allocator.create(RegexNode);
+    alt_node.* = RegexNode{ .alternation = try alternatives.toOwnedSlice(allocator) };
+    return alt_node;
 }
 
 pub fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
-    var index: usize = 0;
-    const root = try parse_expression(allocator, tokens, &index);
-    if (index != tokens.tokens.len) {
-        // leftover tokens (e.g. unmatched ')' or other unexpected tokens)
-        return error.UnsupportedToken;
-    }
-
-    return Regex{
-        .allocator = allocator,
-        .root = root,
-    };
+    var idx: usize = 0;
+    const root = try parse_expression(allocator, tokens, &idx);
+    return Regex{ .allocator = allocator, .root = root };
 }
 
-const RegexEvaluationInternal = struct {
+// Atomic matcher: matches a single node (possibly complex like a sequence or alternation)
+// but does not perform continuation/backtracking for the parent sequence. Continuation
+// and backtracking live in `match_nodes` only.
+fn match_single_node(allocator: std.mem.Allocator, node: *const RegexNode, cursor: *RegexCursor) bool {
+    const input_len = cursor.input.len;
+    switch (node.*) {
+        .literal => |lit| {
+            if (cursor.current >= input_len) return false;
+            if (cursor.input[cursor.current] == lit) {
+                cursor.current += 1;
+                return true;
+            }
+            return false;
+        },
+        .dot => {
+            if (cursor.current < input_len) {
+                cursor.current += 1;
+                return true;
+            }
+            return false;
+        },
+        .character_class => |class| {
+            if (cursor.current >= input_len) return false;
+            const c = cursor.input[cursor.current];
+            var matched = false;
+            for (class.characters) |cc| {
+                switch (cc) {
+                    .char => |ch| {
+                        if (c == ch) matched = true;
+                    },
+                    .range => |r| {
+                        if (c >= r.start and c <= r.end) matched = true;
+                    },
+                }
+                if (matched) break;
+            }
+            if (class.negated) matched = !matched;
+            if (matched) {
+                cursor.current += 1;
+                return true;
+            }
+            return false;
+        },
+        .start_of_line_anchor => {
+            if (cursor.current == 0 or cursor.input[cursor.current - 1] == '\n') return true;
+            return false;
+        },
+        .end_of_line_anchor => {
+            if (cursor.current == input_len or cursor.input[cursor.current] == '\n') return true;
+            return false;
+        },
+        .sequence => |nodes| {
+            return match_nodes(allocator, nodes, 0, cursor);
+        },
+        else => std.debug.panic("Invalid Node passed to `match_single_node`: {f}", .{node}),
+    }
+}
+
+fn match_nodes(allocator: std.mem.Allocator, nodes: []*RegexNode, idx: usize, cursor: *RegexCursor) bool {
+    const n = nodes.len;
+    if (idx >= n) return true;
+
+    const node = nodes[idx];
+    switch (node.*) {
+        .quantified => |q| {
+            const start_pos = cursor.current;
+            var positions = std.ArrayList(usize).empty;
+            defer positions.deinit(allocator);
+
+            // greedy matches need to backtrack. for example, with the following pattern `ca+ats` and the input `caaats`,
+            // matching `a+` would naively eat all 3 `a`'s, however then we're left without any remaining `a`'s to match.
+            // to handle this, we first match as many of the quantifier nodes as possible, recording the position of each
+            // pattern we match.
+            //
+            // with all match positions in hand, we then walk backwards through them, attempting to match the rest of the
+            // nodes. we prioritize the longest match and if we walk too far back such that we don't satisfy our minimum
+            // amount, we break out.
+
+            var count: usize = 0;
+            while (true) {
+                if (q.quantifier.max) |max| if (count >= max) break;
+                const before = cursor.current;
+                if (!match_single_node(allocator, q.node, cursor)) break;
+                if (cursor.current == before) break; // avoid infinite loop on zero-width
+                positions.append(allocator, cursor.current) catch {
+                    cursor.current = start_pos;
+                    return false;
+                };
+                count += 1;
+            }
+
+            if (q.quantifier.greedy) {
+                var k: usize = positions.items.len;
+                while (true) {
+                    if (k < q.quantifier.min) break;
+                    if (k == 0) {
+                        cursor.current = start_pos;
+                    } else {
+                        cursor.current = positions.items[k - 1];
+                    }
+                    if (match_nodes(allocator, nodes, idx + 1, cursor)) return true;
+                    if (k == 0) break;
+                    k -= 1;
+                }
+            } else {
+                var k: usize = q.quantifier.min;
+                while (k <= positions.items.len) {
+                    if (k == 0) {
+                        cursor.current = start_pos;
+                    } else {
+                        cursor.current = positions.items[k - 1];
+                    }
+                    if (match_nodes(allocator, nodes, idx + 1, cursor)) return true;
+                    k += 1;
+                }
+            }
+
+            cursor.current = start_pos;
+            return false;
+        },
+        .alternation => |alts| {
+            const before = cursor.*;
+            for (alts) |alt| {
+                cursor.* = before;
+                if (match_single_node(allocator, alt, cursor)) {
+                    if (match_nodes(allocator, nodes, idx + 1, cursor)) return true;
+                }
+            }
+            cursor.* = before;
+            return false;
+        },
+        .sequence => |seq_nodes| {
+            const before = cursor.*;
+            if (!match_nodes(allocator, seq_nodes, 0, cursor)) {
+                cursor.* = before;
+                return false;
+            }
+            if (match_nodes(allocator, nodes, idx + 1, cursor)) return true;
+            cursor.* = before;
+            return false;
+        },
+        else => {
+            const before = cursor.current;
+            if (!match_single_node(allocator, node, cursor)) return false;
+            if (match_nodes(allocator, nodes, idx + 1, cursor)) return true;
+            cursor.current = before;
+            return false;
+        },
+    }
+}
+
+pub const Regex = struct {
     const Self = @This();
 
-    matches: bool,
+    allocator: std.mem.Allocator,
+    root: *RegexNode,
+
+    pub fn matches(self: *const Self, input: []const u8) bool {
+        var i: usize = 0;
+        while (i <= input.len) {
+            var cursor = RegexCursor{ .input = input, .current = i };
+
+            switch (self.root.*) {
+                .sequence => |nodes| if (match_nodes(self.allocator, nodes, 0, &cursor)) return true,
+                else => {
+                    var single: [1]*RegexNode = .{self.root};
+                    if (match_nodes(self.allocator, single[0..], 0, &cursor)) return true;
+                },
+            }
+
+            i += 1;
+        }
+        return false;
+    }
 
     pub fn format(self: Self, writer: *std.Io.Writer) !void {
-        try writer.print("RegexEvaluationInternal{{ .matches={} }}", .{self.matches});
+        try writer.print("{f}", .{self.root});
+    }
+
+    pub fn deinit(self: *const Self) void {
+        self.root.deinit(self.allocator);
+        self.allocator.destroy(self.root);
     }
 };
 
 fn test_regex(pattern: []const u8, input: []const u8, expect_matches: bool) !void {
     const allocator = std.testing.allocator;
-
     const tokens = try tokenize(allocator, pattern);
     defer allocator.free(tokens.tokens);
 
@@ -722,6 +702,10 @@ test "regex 'ca+ts' matches 'cats'" {
 
 test "regex 'ca+ts' matches 'caats'" {
     try test_regex("ca+ts", "caats", true);
+}
+
+test "regex 'ca+ats' matches 'caaats'" {
+    try test_regex("ca+ats", "caaats", true);
 }
 
 test "regex 'ca+ts' does not match 'cts'" {
