@@ -147,7 +147,7 @@ pub const RegexNode = union(enum) {
     }
 
     pub fn evaluate(self: *const Self, cursor: *RegexCursor) RegexEvaluationInternal {
-        std.log.debug("Evaluating {f} against '{s}'", .{ self.*, cursor.input[cursor.current..] });
+        std.log.debug("Evaluating '{s}' against {f}", .{ cursor.input[cursor.current..], self.* });
         // while (cursor.current <= cursor.input.len) {
         switch (self.*) {
             .literal => |lit| {
@@ -252,8 +252,6 @@ pub const RegexNode = union(enum) {
             },
         }
         return RegexEvaluationInternal{ .matches = false };
-        // }
-        // return RegexEvaluationInternal{ .matches = false };
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
@@ -363,160 +361,209 @@ pub fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !RegexTokens 
     return RegexTokens{ .tokens = try tokens.toOwnedSlice(allocator) };
 }
 
-pub fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
-    var nodes = std.ArrayList(*RegexNode).empty;
-    defer nodes.deinit(allocator);
+fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize) !*RegexNode {
+    const len = tokens.tokens.len;
+    var alternatives = std.ArrayList(*RegexNode).empty;
+    defer alternatives.deinit(allocator);
 
-    var i: usize = 0;
-    while (i < tokens.tokens.len) : (i += 1) {
-        const token = tokens.tokens[i];
-        const node = switch (token) {
-            .literal => |c| blk: {
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .literal = c };
-                break :blk node;
-            },
-            .dot => blk: {
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .dot = {} };
-                break :blk node;
-            },
-            .escaped => |c| blk: {
-                if (c == 'w') {
-                    // \w = [a-zA-Z0-9_]
-                    const chars = try allocator.alloc(RegexCharacter, 4);
-                    chars[0] = RegexCharacter{ .range = .{ .start = 'a', .end = 'z' } };
-                    chars[1] = RegexCharacter{ .range = .{ .start = 'A', .end = 'Z' } };
-                    chars[2] = RegexCharacter{ .range = .{ .start = '0', .end = '9' } };
-                    chars[3] = RegexCharacter{ .char = '_' };
-                    const class = RegexCharacterClass{ .negated = false, .characters = chars };
-                    const node = try allocator.create(RegexNode);
-                    node.* = RegexNode{ .character_class = class };
-                    break :blk node;
-                } else if (c == 'd') {
-                    // \d = [0-9]
-                    const chars = try allocator.alloc(RegexCharacter, 1);
-                    chars[0] = RegexCharacter{ .range = .{ .start = '0', .end = '9' } };
-                    const class = RegexCharacterClass{ .negated = false, .characters = chars };
-                    const node = try allocator.create(RegexNode);
-                    node.* = RegexNode{ .character_class = class };
-                    break :blk node;
-                } else {
-                    return error.UnsupportedEscape;
-                }
-            },
-            .open_square_bracket => blk: {
-                var char_list = std.ArrayList(RegexCharacter).empty;
-                defer char_list.deinit(allocator);
+    while (true) {
+        var seq = std.ArrayList(*RegexNode).empty;
+        defer seq.deinit(allocator);
 
-                i += 1;
-                var negated = false;
-                if (i < tokens.tokens.len and tokens.tokens[i] == RegexToken.caret) {
-                    negated = true;
-                    i += 1;
-                }
-
-                while (i < tokens.tokens.len and tokens.tokens[i] != RegexToken.close_square_bracket) {
-                    switch (tokens.tokens[i]) {
-                        .literal => |c| {
-                            // Check for range: [a-z]
-                            if (i + 2 < tokens.tokens.len and tokens.tokens[i + 1] == RegexToken.dash and tokens.tokens[i + 2] == RegexToken.literal) {
-                                const start = c;
-                                const end = tokens.tokens[i + 2].literal;
-                                try char_list.append(allocator, RegexCharacter{ .range = .{ .start = start, .end = end } });
-                                i += 2; // skip over '-' and end char
-                            } else {
-                                try char_list.append(allocator, RegexCharacter{ .char = c });
-                            }
-                        },
-                        .escaped => |c| {
-                            // Support escapes like \d, \w, etc inside character classes
-                            if (c == 'w') {
-                                try char_list.append(allocator, RegexCharacter{ .range = .{ .start = 'a', .end = 'z' } });
-                                try char_list.append(allocator, RegexCharacter{ .range = .{ .start = 'A', .end = 'Z' } });
-                                try char_list.append(allocator, RegexCharacter{ .range = .{ .start = '0', .end = '9' } });
-                                try char_list.append(allocator, RegexCharacter{ .char = '_' });
-                            } else if (c == 'd') {
-                                try char_list.append(allocator, RegexCharacter{ .range = .{ .start = '0', .end = '9' } });
-                            } else {
-                                // fallback: treat as literal
-                                try char_list.append(allocator, RegexCharacter{ .char = c });
-                            }
-                        },
-                        // TODO impl escaped character support, also many control
-                        // characters are actually literals when in a character class,
-                        // e.g. `[(]` matches the `(` character literally
-                        else => return error.UnsupportedCharacterClassToken,
+        while (i.* < len and tokens.tokens[i.*] != RegexToken.pipe and tokens.tokens[i.*] != RegexToken.close_paren) {
+            var atom: *RegexNode = undefined;
+            const tok = tokens.tokens[i.*];
+            switch (tok) {
+                .literal => |c| {
+                    atom = try allocator.create(RegexNode);
+                    atom.* = RegexNode{ .literal = c };
+                    i.* += 1;
+                },
+                .dot => {
+                    atom = try allocator.create(RegexNode);
+                    atom.* = RegexNode{ .dot = {} };
+                    i.* += 1;
+                },
+                .escaped => |c| {
+                    if (c == 'w') {
+                        const chars = try allocator.alloc(RegexCharacter, 4);
+                        chars[0] = RegexCharacter{ .range = .{ .start = 'a', .end = 'z' } };
+                        chars[1] = RegexCharacter{ .range = .{ .start = 'A', .end = 'Z' } };
+                        chars[2] = RegexCharacter{ .range = .{ .start = '0', .end = '9' } };
+                        chars[3] = RegexCharacter{ .char = '_' };
+                        const class = RegexCharacterClass{ .negated = false, .characters = chars };
+                        atom = try allocator.create(RegexNode);
+                        atom.* = RegexNode{ .character_class = class };
+                        i.* += 1;
+                    } else if (c == 'd') {
+                        const chars = try allocator.alloc(RegexCharacter, 1);
+                        chars[0] = RegexCharacter{ .range = .{ .start = '0', .end = '9' } };
+                        const class = RegexCharacterClass{ .negated = false, .characters = chars };
+                        atom = try allocator.create(RegexNode);
+                        atom.* = RegexNode{ .character_class = class };
+                        i.* += 1;
+                    } else {
+                        return error.UnsupportedEscape;
                     }
-                    i += 1;
+                },
+                .open_square_bracket => {
+                    var char_list = std.ArrayList(RegexCharacter).empty;
+                    defer char_list.deinit(allocator);
+
+                    i.* += 1; // consume '['
+                    var negated = false;
+                    if (i.* < len and tokens.tokens[i.*] == RegexToken.caret) {
+                        negated = true;
+                        i.* += 1;
+                    }
+
+                    while (i.* < len and tokens.tokens[i.*] != RegexToken.close_square_bracket) {
+                        switch (tokens.tokens[i.*]) {
+                            .literal => |c| {
+                                // range handling e.g. [a-z]
+                                if (i.* + 2 < len and tokens.tokens[i.* + 1] == RegexToken.dash and tokens.tokens[i.* + 2] == RegexToken.literal) {
+                                    const start = c;
+                                    const end = tokens.tokens[i.* + 2].literal;
+                                    try char_list.append(allocator, RegexCharacter{ .range = .{ .start = start, .end = end } });
+                                    i.* += 3; // consume start, '-', end
+                                    continue; // continue main loop without extra i increment
+                                } else {
+                                    try char_list.append(allocator, RegexCharacter{ .char = c });
+                                }
+                            },
+                            .escaped => |c| {
+                                if (c == 'w') {
+                                    try char_list.append(allocator, RegexCharacter{ .range = .{ .start = 'a', .end = 'z' } });
+                                    try char_list.append(allocator, RegexCharacter{ .range = .{ .start = 'A', .end = 'Z' } });
+                                    try char_list.append(allocator, RegexCharacter{ .range = .{ .start = '0', .end = '9' } });
+                                    try char_list.append(allocator, RegexCharacter{ .char = '_' });
+                                } else if (c == 'd') {
+                                    try char_list.append(allocator, RegexCharacter{ .range = .{ .start = '0', .end = '9' } });
+                                } else {
+                                    try char_list.append(allocator, RegexCharacter{ .char = c });
+                                }
+                            },
+                            else => return error.UnsupportedCharacterClassToken,
+                        }
+                        i.* += 1;
+                    }
+
+                    if (i.* >= len or tokens.tokens[i.*] != RegexToken.close_square_bracket) {
+                        return error.UnclosedCharacterClass;
+                    }
+
+                    const class = RegexCharacterClass{ .negated = negated, .characters = try char_list.toOwnedSlice(allocator) };
+                    atom = try allocator.create(RegexNode);
+                    atom.* = RegexNode{ .character_class = class };
+
+                    i.* += 1; // consume ']'
+                },
+                .caret => {
+                    atom = try allocator.create(RegexNode);
+                    atom.* = RegexNode{ .start_of_line_anchor = {} };
+                    i.* += 1; // consume '^'
+                },
+                .dollar_sign => {
+                    atom = try allocator.create(RegexNode);
+                    atom.* = RegexNode{ .end_of_line_anchor = {} };
+                    i.* += 1; // consume '$'
+                },
+                .open_paren => {
+                    // group handling: ['(', Alternation, ')']
+                    i.* += 1; // consume '('
+                    atom = try parse_expression(allocator, tokens, i);
+                    if (i.* >= len or tokens.tokens[i.*] != RegexToken.close_paren) {
+                        return error.UnclosedParenthesis;
+                    }
+                    i.* += 1; // consume ')'
+                },
+                else => return error.UnsupportedToken,
+            }
+
+            // parse quantifiers, if present
+            if (i.* < len) {
+                const qtok = tokens.tokens[i.*];
+                switch (qtok) {
+                    .star => {
+                        const qn = try allocator.create(RegexNode);
+                        qn.* = RegexNode{ .quantified = .{
+                            .node = atom,
+                            .quantifier = RegexQuantifier{ .min = 0, .max = null, .greedy = true },
+                        } };
+                        atom = qn;
+                        i.* += 1; // consume '*'
+                    },
+                    .plus => {
+                        const qn = try allocator.create(RegexNode);
+                        qn.* = RegexNode{ .quantified = .{
+                            .node = atom,
+                            .quantifier = RegexQuantifier{ .min = 1, .max = null, .greedy = true },
+                        } };
+                        atom = qn;
+                        i.* += 1; // consume '+'
+                    },
+                    .question_mark => {
+                        const qn = try allocator.create(RegexNode);
+                        qn.* = RegexNode{ .quantified = .{
+                            .node = atom,
+                            .quantifier = RegexQuantifier{ .min = 0, .max = 1, .greedy = true },
+                        } };
+                        atom = qn;
+                        i.* += 1; // consume '?'
+                    },
+                    .open_curly_bracket => {
+                        std.debug.panic("TODO: impl specific quantifiers", .{});
+                    },
+                    else => {},
                 }
+            }
 
-                if (i >= tokens.tokens.len or tokens.tokens[i] != RegexToken.close_square_bracket) {
-                    return error.UnclosedCharacterClass;
-                }
+            try seq.append(allocator, atom);
+        }
 
-                // No need to increment i here, the for loop will do it
+        if (seq.items.len == 0) {
+            const empty_seq = try allocator.create(RegexNode);
+            empty_seq.* = RegexNode{ .sequence = try seq.toOwnedSlice(allocator) };
+            try alternatives.append(allocator, empty_seq);
+        } else if (seq.items.len == 1) {
+            try alternatives.append(allocator, seq.items[0]);
+        } else {
+            const seq_node = try allocator.create(RegexNode);
+            seq_node.* = RegexNode{ .sequence = try seq.toOwnedSlice(allocator) };
+            try alternatives.append(allocator, seq_node);
+        }
 
-                const class = RegexCharacterClass{ .negated = negated, .characters = try char_list.toOwnedSlice(allocator) };
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .character_class = class };
-                break :blk node;
-            },
-            .caret => blk: {
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .start_of_line_anchor = {} };
-                break :blk node;
-            },
-            .dollar_sign => blk: {
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .end_of_line_anchor = {} };
-                break :blk node;
-            },
-            .plus => blk: {
-                const prev_node = nodes.pop() orelse std.debug.panic("Found quantifier with no previous node", .{});
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .quantified = .{
-                    .node = prev_node,
-                    .quantifier = RegexQuantifier{ .min = 1, .max = null, .greedy = true },
-                } };
-                break :blk node;
-            },
-            .star => blk: {
-                const prev_node = nodes.pop() orelse std.debug.panic("Found quantifier with no previous node", .{});
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .quantified = .{
-                    .node = prev_node,
-                    .quantifier = RegexQuantifier{ .min = 0, .max = null, .greedy = true },
-                } };
-                break :blk node;
-            },
-            .question_mark => blk: {
-                const prev_node = nodes.pop() orelse std.debug.panic("Found quantifier with no previous node", .{});
-                const node = try allocator.create(RegexNode);
-                node.* = RegexNode{ .quantified = .{
-                    .node = prev_node,
-                    .quantifier = RegexQuantifier{ .min = 0, .max = 1, .greedy = true },
-                } };
-                break :blk node;
-            },
-            else => return error.UnsupportedToken,
-        };
-        try nodes.append(allocator, node);
+        // if next token is '|', consume it and parse the next alternative
+        if (i.* < len and tokens.tokens[i.*] == RegexToken.pipe) {
+            i.* += 1; // consume '|'
+            continue;
+        } else {
+            break;
+        }
     }
 
-    if (nodes.items.len == 1) {
-        return Regex{
-            .allocator = allocator,
-            .root = nodes.items[0],
-        };
+    // build alternation node if needed
+    if (alternatives.items.len == 1) {
+        return alternatives.items[0];
     } else {
-        const seq_node = try allocator.create(RegexNode);
-        seq_node.* = RegexNode{ .sequence = try nodes.toOwnedSlice(allocator) };
-        return Regex{
-            .allocator = allocator,
-            .root = seq_node,
-        };
+        const alt_node = try allocator.create(RegexNode);
+        alt_node.* = RegexNode{ .alternation = try alternatives.toOwnedSlice(allocator) };
+        return alt_node;
     }
+}
+
+pub fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
+    var index: usize = 0;
+    const root = try parse_expression(allocator, tokens, &index);
+    if (index != tokens.tokens.len) {
+        // leftover tokens (e.g. unmatched ')' or other unexpected tokens)
+        return error.UnsupportedToken;
+    }
+
+    return Regex{
+        .allocator = allocator,
+        .root = root,
+    };
 }
 
 const RegexEvaluationInternal = struct {
@@ -743,4 +790,32 @@ test "regex '...' matches 'cat'" {
 
 test "regex '.\\d.' matches 'a1b'" {
     try test_regex(".\\d.", "a1b", true);
+}
+
+test "regex '(cat|dog)' matches 'cat'" {
+    try test_regex("(cat|dog)", "cat", true);
+}
+
+test "regex '(cat|dog)' matches 'dog'" {
+    try test_regex("(cat|dog)", "dog", true);
+}
+
+test "regex '(cat|dog)' does not match 'apple'" {
+    try test_regex("(cat|dog)", "apple", false);
+}
+
+test "regex '(cat|dog)' matches 'doghouse'" {
+    try test_regex("(cat|dog)", "doghouse", true);
+}
+
+test "regex 'I like (cats|dogs)' matches 'I like cats'" {
+    try test_regex("I like (cats|dogs)", "I like cats", true);
+}
+
+test "regex 'I like (cats|dogs)' matches 'I like dogs'" {
+    try test_regex("I like (cats|dogs)", "I like dogs", true);
+}
+
+test "regex '(red|blue|green)' matches 'blue'" {
+    try test_regex("(red|blue|green)", "blue", true);
 }
