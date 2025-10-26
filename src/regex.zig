@@ -4,8 +4,8 @@
 
 const std = @import("std");
 
-//! Cursor's represent the current state of a regex match attempt, containing the input string, the current position in the string,
-//! and any capture groups that have been matched so far.
+// Cursor's represent the current state of a regex match attempt, containing the input string, the current position in the string,
+// and any capture groups that have been matched so far.
 pub const RegexCursor = struct {
     const Self = @This();
 
@@ -204,7 +204,7 @@ pub const RegexNode = union(enum) {
     }
 };
 
-pub fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !RegexTokens {
+fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !RegexTokens {
     var tokens = std.ArrayList(RegexToken).empty;
     defer tokens.deinit(allocator);
 
@@ -457,7 +457,7 @@ fn parse_alternation(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usiz
     return RegexAlternation{ .alternations = try nodes.toOwnedSlice(allocator) };
 }
 
-pub fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
+fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
     var idx: usize = 0;
     var capture_group_idx: u8 = 1;
     const root = try parse_alternation(allocator, tokens, &idx, &capture_group_idx, false);
@@ -634,6 +634,13 @@ pub const Regex = struct {
     allocator: std.mem.Allocator,
     root: RegexAlternation,
     capture_group_buffer: [][]const u8,
+
+    pub fn for_pattern(allocator: std.mem.Allocator, pattern: []const u8) !Self {
+        const tokens = try tokenize(allocator, pattern);
+        defer allocator.free(tokens.tokens);
+        const regex = try parse_tokens(allocator, tokens);
+        return regex;
+    }
 
     pub fn matches(self: *const Self, input: []const u8) bool {
         std.log.debug("Attempting to match input '{s}' against regex {f}", .{ input, self });
