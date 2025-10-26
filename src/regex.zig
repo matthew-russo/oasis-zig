@@ -1,5 +1,11 @@
+//! This is an inefficient, partial implementation of Regex evaluation. Its current form exists to learn about regexes, not to make an
+//! efficient, production ready regex engine. It currently supports capture groups, backreferences, digit and word character classes,
+//! alternations, and quantifiers. At some point once I deem funtionality sufficient, I'll work on converting it to a finite automaton.
+
 const std = @import("std");
 
+//! Cursor's represent the current state of a regex match attempt, containing the input string, the current position in the string,
+//! and any capture groups that have been matched so far.
 pub const RegexCursor = struct {
     const Self = @This();
 
@@ -68,6 +74,7 @@ pub const RegexToken = union(enum) {
     }
 };
 
+// Wrapper struct to provide a sane format method
 pub const RegexTokens = struct {
     const Self = @This();
 
