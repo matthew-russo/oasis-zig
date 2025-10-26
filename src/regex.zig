@@ -620,6 +620,8 @@ fn test_regex(pattern: []const u8, input: []const u8, expect_matches: bool) !voi
     try std.testing.expect(regex.matches(input) == expect_matches);
 }
 
+// literal characters
+
 test "regex 'd' matches dog" {
     try test_regex("d", "dog", true);
 }
@@ -627,6 +629,8 @@ test "regex 'd' matches dog" {
 test "regex 'f' does not match dog" {
     try test_regex("f", "dog", false);
 }
+
+// character classes
 
 test "regex '\\d' matches 123" {
     try test_regex("\\d", "123", true);
@@ -664,6 +668,8 @@ test "regex '[abc]' does not match 'dog'" {
     try test_regex("[abc]", "dog", false);
 }
 
+// negated character classes
+
 test "regex '[^abc]' matches 'cat'" {
     try test_regex("[^abc]", "cat", true);
 }
@@ -671,6 +677,8 @@ test "regex '[^abc]' matches 'cat'" {
 test "regex '[^abc]' does not match 'cab'" {
     try test_regex("[^abc]", "cab", false);
 }
+
+// combined patterns
 
 test "regex '\\d apple' matches '1 apple'" {
     try test_regex("\\d apple", "1 apple", true);
@@ -700,6 +708,8 @@ test "regex '\\d \\w\\w\\ws' does not match '1 dog'" {
     try test_regex("\\d \\w\\w\\ws", "1 dog", false);
 }
 
+// start of line anchor
+
 test "regex '^log' matches 'log'" {
     try test_regex("^log", "log", true);
 }
@@ -715,6 +725,8 @@ test "regex '^log' does not match 'slog'" {
 test "regex '^\\d\\d\\d' matches '123abc'" {
     try test_regex("^\\d\\d\\d", "123abc", true);
 }
+
+// end of line anchor
 
 test "regex 'dog$' matches 'dog'" {
     try test_regex("dog$", "dog", true);
@@ -735,6 +747,8 @@ test "regex '\\w\\w\\w$' does not match 'abc123@'" {
 test "regex '\\w\\w\\w$' matches 'abc123cde'" {
     try test_regex("\\w\\w\\w$", "abc123cde", true);
 }
+
+// quantifiers
 
 test "regex 'a+' matches 'apple'" {
     try test_regex("a+", "apple", true);
@@ -800,6 +814,48 @@ test "regex '\\d?' matches ''" {
     try test_regex("\\d?", "", true);
 }
 
+test "regex 'ca*t' matches 'ct'" {
+    try test_regex("ca*t", "ct", true);
+}
+
+test "regex 'ca*t' matches 'caaat'" {
+    try test_regex("ca*t", "caaat", true);
+}
+
+test "regex 'ca*t' does not match 'dog'" {
+    try test_regex("ca*t", "dog", false);
+}
+
+test "regex 'k\\d*t' matches 'kt'" {
+    try test_regex("k\\d*t", "kt", true);
+}
+
+test "regex 'k\\d*t' matches 'k1t'" {
+    try test_regex("k\\d*t", "k1t", true);
+}
+
+test "regex 'k\\d*t' does not match 'kabct'" {
+    try test_regex("k\\d*t", "kabct", false);
+}
+
+test "regex 'k[abc]*t' matches 'kt'" {
+    try test_regex("k[abc]*t", "kt", true);
+}
+
+test "regex 'k[abc]*t' matches 'kat'" {
+    try test_regex("k[abc]*t", "kat", true);
+}
+
+test "regex 'k[abc]*t' matches 'kabct'" {
+    try test_regex("k[abc]*t", "kabct", true);
+}
+
+test "regex 'k[abc]*t' does not match 'kaxyzt'" {
+    try test_regex("k[abc]*t", "kaxyzt", false);
+}
+
+// wildcard
+
 test "regex 'd.g' matches 'dog'" {
     try test_regex("d.g", "dog", true);
 }
@@ -828,6 +884,8 @@ test "regex '.\\d.' matches 'a1b'" {
     try test_regex(".\\d.", "a1b", true);
 }
 
+// alternations
+
 test "regex 'cat|dog' matches 'cat'" {
     try test_regex("cat|dog", "cat", true);
 }
@@ -835,6 +893,8 @@ test "regex 'cat|dog' matches 'cat'" {
 test "regex 'cat|dog' matches 'dog'" {
     try test_regex("cat|dog", "dog", true);
 }
+
+// capture groups and alternations
 
 test "regex '(cat|dog)' matches 'cat'" {
     try test_regex("(cat|dog)", "cat", true);
@@ -863,6 +923,8 @@ test "regex 'I like (cats|dogs)' matches 'I like dogs'" {
 test "regex '(red|blue|green)' matches 'blue'" {
     try test_regex("(red|blue|green)", "blue", true);
 }
+
+// backreferences
 
 test "regex '(cat) and \\1' matches 'cat and cat'" {
     try test_regex("(cat) and \\1", "cat and cat", true);
