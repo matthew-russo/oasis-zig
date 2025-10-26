@@ -366,6 +366,10 @@ fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize
             atom.* = RegexNode{ .literal = '-' };
             i.* += 1; // consume '-'
         },
+        .comma => {
+            atom.* = RegexNode{ .literal = ',' };
+            i.* += 1; // consume ','
+        },
         else => {
             std.log.err("Unsupported token in parse_expression: {f}", .{tok});
             return error.UnsupportedToken;
@@ -1178,4 +1182,8 @@ test "regex '((\\w+) \\2) and \\1' matches 'cat cat and cat cat'" {
 
 test "regex '((cat) and \\2) is the same as \\1' matches 'cat and cat is the same as cat'" {
     try test_regex("((cat) and \\2) is the same as \\1", "cat and cat is the same as cat and cat", true);
+}
+
+test "regex '^([act]+) is \\1, not [^xyz]+$' matches 'cat is cat, not dog'" {
+    try test_regex("^([act]+) is \\1, not [^xyz]+$", "cat is cat, not dog", true);
 }
