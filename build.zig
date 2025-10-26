@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .name = "oasis unit tests",
         .root_module = oasis_module,
+        .filters = b.args orelse &.{},
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
