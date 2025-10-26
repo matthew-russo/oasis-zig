@@ -231,6 +231,28 @@ pub fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !RegexTokens 
     return RegexTokens{ .tokens = try tokens.toOwnedSlice(allocator) };
 }
 
+fn parse_number(tokens: RegexTokens, i: *usize) ?usize {
+    const len = tokens.tokens.len;
+    var val: usize = 0;
+    var parsed: bool = false;
+    while (i.* < len) {
+        const t = tokens.tokens[i.*];
+        switch (t) {
+            .literal => |c| {
+                if (!std.ascii.isDigit(c)) break;
+                val = val * 10 + (c - '0');
+                i.* += 1;
+                parsed = true;
+                continue;
+            },
+            else => {},
+        }
+        break;
+    }
+    if (!parsed) return null;
+    return val;
+}
+
 fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize, capture_group_idx: *u8) !*RegexNode {
     const len = tokens.tokens.len;
 
@@ -364,6 +386,26 @@ fn parse_expression(allocator: std.mem.Allocator, tokens: RegexTokens, i: *usize
                 qn.* = RegexNode{ .quantified = .{ .node = atom, .quantifier = RegexQuantifier{ .min = 0, .max = 1, .greedy = true } } };
                 atom = qn;
                 i.* += 1;
+            },
+            .open_curly_bracket => {
+                i.* += 1; // consume '{'
+
+                const min = parse_number(tokens, i) orelse return error.InvalidQuantifier;
+
+                var max_val: ?usize = min;
+                if (i.* < len and tokens.tokens[i.*] == RegexToken.comma) {
+                    i.* += 1; // consume ','
+                    max_val = parse_number(tokens, i);
+                }
+
+                if (i.* >= len or tokens.tokens[i.*] != RegexToken.close_curly_bracket) return error.UnclosedCurlyBracket;
+                i.* += 1; // consume '}'
+
+                if (max_val) |mv| if (mv < min) return error.InvalidQuantifier;
+
+                const qn = try allocator.create(RegexNode);
+                qn.* = RegexNode{ .quantified = .{ .node = atom, .quantifier = RegexQuantifier{ .min = min, .max = max_val, .greedy = true } } };
+                atom = qn;
             },
             else => {},
         }
@@ -748,7 +790,7 @@ test "regex '\\w\\w\\w$' matches 'abc123cde'" {
     try test_regex("\\w\\w\\w$", "abc123cde", true);
 }
 
-// quantifiers
+// quantifiers (+, ?, *)
 
 test "regex 'a+' matches 'apple'" {
     try test_regex("a+", "apple", true);
@@ -852,6 +894,148 @@ test "regex 'k[abc]*t' matches 'kabct'" {
 
 test "regex 'k[abc]*t' does not match 'kaxyzt'" {
     try test_regex("k[abc]*t", "kaxyzt", false);
+}
+
+// quantifiers (specified)
+
+test "regex 'ca{3}t' matches 'caaat'" {
+    try test_regex("ca{3}t", "caaat", true);
+}
+
+test "regex 'ca{3}t' does not match 'caat'" {
+    try test_regex("ca{3}t", "caat", false);
+}
+
+test "regex 'ca{3}t' does not match 'caaaat'" {
+    try test_regex("ca{3}t", "caaaat", false);
+}
+
+test "regex 'd\\d{2}g' matches 'd42g'" {
+    try test_regex("d\\d{2}g", "d42g", true);
+}
+
+test "regex 'd\\d{2}g' does not match 'd1g'" {
+    try test_regex("d\\d{2}g", "d1g", false);
+}
+
+test "regex 'd\\d{2}g' does not match 'd123g'" {
+    try test_regex("d\\d{2}g", "d123g", false);
+}
+
+test "regex 'c[xyz]{4}w' matches 'czyxzw'" {
+    try test_regex("c[xyz]{4}w", "czyxzw", true);
+}
+
+test "regex 'c[xyz]{4}w' does not match 'cxyzw'" {
+    try test_regex("c[xyz]{4}w", "cxyzw", false);
+}
+
+test "regex 'a{12}' matches 'aaaaaaaaaaaa'" {
+    try test_regex("a{12}", "aaaaaaaaaaaa", true);
+}
+
+test "regex 'a{12}' does not match 'a'" {
+    try test_regex("a{12}", "a", false);
+}
+
+// quantifiers (specified unbounded range)
+
+test "regex 'ca{2,}t' matches 'caat'" {
+    try test_regex("ca{2,}t", "caat", true);
+}
+
+test "regex 'ca{2,}t' matches 'caaaaat'" {
+    try test_regex("ca{2,}t", "caaaaat", true);
+}
+
+test "regex 'ca{2,}t' does not match 'cat'" {
+    try test_regex("ca{2,}t", "cat", false);
+}
+
+test "regex 'x\\d{3,}y' matches 'x9999y'" {
+    try test_regex("x\\d{3,}y", "x9999y", true);
+}
+
+test "regex 'x\\d{3,}y' does not match 'x42y'" {
+    try test_regex("x\\d{3,}y", "x42y", false);
+}
+
+test "regex 'b[aeiou]{2,}r' matches 'baeiour'" {
+    try test_regex("b[aeiou]{2,}r", "baeiour", true);
+}
+
+test "regex 'b[aeiou]{2,}r' does not match 'bar'" {
+    try test_regex("b[aeiou]{2,}r", "bar", false);
+}
+
+test "regex 'm{10,}' matches 'mmmmmmmmmm'" {
+    try test_regex("m{10,}", "mmmmmmmmmm", true);
+}
+
+test "regex 'm{10,}' matches 'mmmmmmmmmmm'" {
+    try test_regex("m{10,}", "mmmmmmmmmmm", true);
+}
+
+test "regex 'm{10,}' does not match 'm'" {
+    try test_regex("m{10,}", "m", false);
+}
+
+// quantifiers (specified bounded range)
+
+test "regex 'ca{2,4}t' matches 'caat'" {
+    try test_regex("ca{2,4}t", "caat", true);
+}
+
+test "regex 'ca{2,4}t' matches 'caaat'" {
+    try test_regex("ca{2,4}t", "caaat", true);
+}
+
+test "regex 'ca{2,4}t' matches 'caaaat'" {
+    try test_regex("ca{2,4}t", "caaaat", true);
+}
+
+test "regex 'ca{2,4}t' does not match 'caaaaat'" {
+    try test_regex("ca{2,4}t", "caaaaat", false);
+}
+
+test "regex 'n\\d{1,3}m' matches 'n123m'" {
+    try test_regex("n\\d{1,3}m", "n123m", true);
+}
+
+test "regex 'n\\d{1,3}m' does not match 'n1234m'" {
+    try test_regex("n\\d{1,3}m", "n1234m", false);
+}
+
+test "regex 'p[xyz]{2,3}q' matches 'pzzzq'" {
+    try test_regex("p[xyz]{2,3}q", "pzzzq", true);
+}
+
+test "regex 'p[xyz]{2,3}q' does not match 'pxq'" {
+    try test_regex("p[xyz]{2,3}q", "pxq", false);
+}
+
+test "regex 'p[xyz]{2,3}q' does not match 'pxyzyq'" {
+    try test_regex("p[xyz]{2,3}q", "pxyzyq", false);
+}
+
+test "regex 'a{10,11}' matches 'aaaaaaaaaa'" {
+    try test_regex("a{10,11}", "aaaaaaaaaa", true);
+}
+
+test "regex 'a{10,11}' matches 'aaaaaaaaaaa'" {
+    try test_regex("a{10,11}", "aaaaaaaaaaa", true);
+}
+
+test "regex 'a{10,11}' does not match 'aaaaaaaaa'" {
+    try test_regex("a{10,11}", "aaaaaaaaa", false);
+}
+
+test "regex '^a{10,11}$' does not match 'aaaaaaaaaaaa'" {
+    try test_regex("^a{10,11}$", "aaaaaaaaaaaa", false);
+}
+
+test "regex 'a{10,11}' does not match 'a'" {
+    try test_regex("a{10,11}", "a", false);
 }
 
 // wildcard
