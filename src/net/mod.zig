@@ -3,6 +3,8 @@ const std = @import("std");
 
 const collections = @import("../collections/mod.zig");
 const tcp_server = @import("tcp_server.zig");
+const sys = @import("sys.zig");
+const Address = @import("address.zig").Address;
 
 pub const TcpServer = switch (builtin.os.tag) {
     .macos => tcp_server.KqueueTcpServer,
@@ -28,37 +30,46 @@ const TestTcpHandler = struct {
 };
 
 test "expect to be able to construct and destruct a TcpServer" {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
     const handlerImpl = try std.testing.allocator.create(TestTcpHandler);
     handlerImpl.* = TestTcpHandler{};
 
     const handler = tcp_server.TcpConnectionHandler.init(handlerImpl);
 
-    const addr = std.net.Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8080);
-    var server = TcpServer.init(std.testing.allocator, addr, handler);
+    const addr = Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8080);
+    var server = TcpServer.init(std.testing.allocator, threaded.io(), addr, handler);
     defer server.deinit();
 }
 
 test "expect to be able to spawn a TcpServer" {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
     const handlerImpl = try std.testing.allocator.create(TestTcpHandler);
     handlerImpl.* = TestTcpHandler{};
 
     const handler = tcp_server.TcpConnectionHandler.init(handlerImpl);
 
-    const addr = std.net.Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8081);
-    var server = TcpServer.init(std.testing.allocator, addr, handler);
+    const addr = Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8081);
+    var server = TcpServer.init(std.testing.allocator, threaded.io(), addr, handler);
     defer server.deinit();
 
     try server.serve();
 }
 
 test "expect to be able to join a spawned TcpServer" {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
     const handlerImpl = try std.testing.allocator.create(TestTcpHandler);
     handlerImpl.* = TestTcpHandler{};
 
     const handler = tcp_server.TcpConnectionHandler.init(handlerImpl);
 
-    const addr = std.net.Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8082);
-    var server = TcpServer.init(std.testing.allocator, addr, handler);
+    const addr = Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8082);
+    var server = TcpServer.init(std.testing.allocator, threaded.io(), addr, handler);
     defer server.deinit();
 
     try server.serve();
@@ -66,24 +77,28 @@ test "expect to be able to join a spawned TcpServer" {
 }
 
 test "expect to be able to send and receive data from a spawned TcpServer" {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
     const handlerImpl = try std.testing.allocator.create(TestTcpHandler);
     handlerImpl.* = TestTcpHandler{};
 
     const handler = tcp_server.TcpConnectionHandler.init(handlerImpl);
 
-    const addr = std.net.Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8083);
-    var server = TcpServer.init(std.testing.allocator, addr, handler);
+    const addr = Address.initIp4([_]u8{ 0, 0, 0, 0 }, 8083);
+    var server = TcpServer.init(std.testing.allocator, threaded.io(), addr, handler);
     defer server.join();
     defer server.deinit();
 
     try server.serve();
 
-    const conn = try std.net.tcpConnectToAddress(addr);
-    defer conn.close();
+    const conn_fd = try sys.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
+    defer sys.close(conn_fd);
+    try sys.connect(conn_fd, &addr.any, addr.getOsSockLen());
 
     const msg = "hello world";
-    _ = try conn.write(msg);
+    _ = try sys.write(conn_fd, msg);
     var buf: [32]u8 = undefined;
-    const resp_size = try conn.read(buf[0..]);
+    const resp_size = try sys.read(conn_fd, buf[0..]);
     try std.testing.expectEqualSlices(u8, msg, buf[0..resp_size]);
 }

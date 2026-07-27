@@ -30,10 +30,10 @@ pub const Uuid = struct {
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     // |                            rand_b                             |
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    pub fn v4() Self {
+    pub fn v4(io: std.Io) Self {
         var prng = std.Random.DefaultPrng.init(blk: {
             var seed: u64 = undefined;
-            std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+            std.Io.random(io, std.mem.asBytes(&seed));
             break :blk seed;
         });
         const rand = prng.random();
@@ -61,15 +61,15 @@ pub const Uuid = struct {
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     // |                            rand_b                             |
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    pub fn v7() Self {
+    pub fn v7(io: std.Io) Self {
         var prng = std.Random.DefaultPrng.init(blk: {
             var seed: u64 = undefined;
-            std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+            std.Io.random(io, std.mem.asBytes(&seed));
             break :blk seed;
         });
         const rand = prng.random();
 
-        const timestamp_ms = time.millisSinceEpoch();
+        const timestamp_ms = time.millisSinceEpoch(io);
 
         // Hi contains: timestamp (48 bits) + version (4 bits) + rand_a (12 bits)
         const msb: u64 = (@as(u64, timestamp_ms) << 16) | 0x7000 | (rand.int(u64) & 0x0FFF);
@@ -220,7 +220,9 @@ fn hexCharToNibble(c: u8) !u4 {
 }
 
 test "v4" {
-    const uuid = Uuid.v4();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const uuid = Uuid.v4(threaded.io());
     const uuid_str = uuid.toString();
     const roundtripped_uuid = try Uuid.fromString(&uuid_str);
     const roundtripped_uuid_str = roundtripped_uuid.toString();
@@ -230,7 +232,9 @@ test "v4" {
 }
 
 test "v7" {
-    const uuid = Uuid.v7();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const uuid = Uuid.v7(threaded.io());
     const uuid_str = uuid.toString();
     const roundtripped_uuid = try Uuid.fromString(&uuid_str);
     const roundtripped_uuid_str = roundtripped_uuid.toString();

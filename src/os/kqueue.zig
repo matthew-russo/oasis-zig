@@ -2,6 +2,27 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+// Zig 0.16 removed `std.posix.kqueue`/`std.posix.kevent`; call libc directly.
+const c = std.c;
+
+/// Slice-based wrapper mirroring the old `std.posix.kevent` signature, returning
+/// the raw syscall result (>= 0 event count, or -1 on error).
+fn keventSyscall(
+    kq: i32,
+    changelist: []const std.posix.Kevent,
+    eventlist: []std.posix.Kevent,
+    timeout: *const std.posix.timespec,
+) c_int {
+    return c.kevent(
+        kq,
+        changelist.ptr,
+        @intCast(changelist.len),
+        eventlist.ptr,
+        @intCast(eventlist.len),
+        timeout,
+    );
+}
+
 const KqueueHandlerFn = *const fn (
     poller: *KqueuePollerHandle,
     kevent: std.posix.Kevent,
@@ -54,25 +75,28 @@ pub const KqueuePoller = struct {
     const timeout = std.posix.timespec{ .sec = 0, .nsec = 1 * 1000 * 1000 };
 
     allocator: Allocator,
+    io: std.Io,
 
-    handlers_guard: std.Thread.RwLock,
+    handlers_guard: std.Io.RwLock,
     handlers: std.AutoHashMap(KqueuePair, KqueueHandler),
 
     kqfd: i32,
 
-    polling_thread_guard: std.Thread.Mutex,
+    polling_thread_guard: std.Io.Mutex,
     polling_thread: ?std.Thread,
 
     shutdown_signal: std.atomic.Value(bool),
 
-    pub fn init(allocator: Allocator) Self {
-        const kqfd = std.posix.kqueue() catch unreachable;
+    pub fn init(allocator: Allocator, io: std.Io) Self {
+        const kqfd = c.kqueue();
+        if (kqfd == -1) unreachable;
         return Self{
             .allocator = allocator,
-            .handlers_guard = .{},
+            .io = io,
+            .handlers_guard = .init,
             .handlers = std.AutoHashMap(KqueuePair, KqueueHandler).init(allocator),
             .kqfd = kqfd,
-            .polling_thread_guard = .{},
+            .polling_thread_guard = .init,
             .polling_thread = null,
             .shutdown_signal = std.atomic.Value(bool).init(false),
         };
@@ -84,8 +108,8 @@ pub const KqueuePoller = struct {
     }
 
     pub fn spawn(self: *Self) void {
-        self.polling_thread_guard.lock();
-        defer self.polling_thread_guard.unlock();
+        self.polling_thread_guard.lock(self.io) catch unreachable;
+        defer self.polling_thread_guard.unlock(self.io);
 
         if (self.polling_thread) |_| {
             std.debug.panic("[KqueuePoller] trying to spawn when already spawned", .{});
@@ -106,8 +130,8 @@ pub const KqueuePoller = struct {
     }
 
     pub fn join(self: *Self) void {
-        self.polling_thread_guard.lock();
-        defer self.polling_thread_guard.unlock();
+        self.polling_thread_guard.lock(self.io) catch unreachable;
+        defer self.polling_thread_guard.unlock(self.io);
 
         if (self.polling_thread) |polling_thread| {
             self.shutdown_signal.store(true, std.builtin.AtomicOrder.unordered);
@@ -118,8 +142,8 @@ pub const KqueuePoller = struct {
     }
 
     pub fn addHandler(self: *Self, kqueuePair: KqueuePair, data: isize, kqueueHandler: KqueueHandler) void {
-        self.handlers_guard.lock();
-        defer self.handlers_guard.unlock();
+        self.handlers_guard.lock(self.io) catch unreachable;
+        defer self.handlers_guard.unlock(self.io);
         self.addHandlerRaw(kqueuePair, data, kqueueHandler);
     }
 
@@ -132,9 +156,7 @@ pub const KqueuePoller = struct {
             .data = data,
             .udata = 0,
         };
-        const e = std.posix.kevent(self.kqfd, &[_]std.posix.Kevent{kevent}, &.{}, &ctrl_timeout) catch |err| {
-            std.debug.panic("[KqueuePoller] error during kevent syscall adding handler: {any}", .{err});
-        };
+        const e = keventSyscall(self.kqfd, &[_]std.posix.Kevent{kevent}, &.{}, &ctrl_timeout);
         if (e == -1) {
             std.debug.panic("[KqueuePoller] failed to register new event", .{});
         }
@@ -143,8 +165,8 @@ pub const KqueuePoller = struct {
     }
 
     pub fn removeHandler(self: *Self, kqueuePair: KqueuePair) void {
-        self.handlers_guard.lock();
-        defer self.handlers_guard.unlock();
+        self.handlers_guard.lock(self.io) catch unreachable;
+        defer self.handlers_guard.unlock(self.io);
         self.removeHandlerRaw(kqueuePair);
     }
 
@@ -159,9 +181,7 @@ pub const KqueuePoller = struct {
                 .udata = 0,
             };
 
-            const e = std.posix.kevent(self.kqfd, &[_]std.posix.Kevent{kevent}, &.{}, &ctrl_timeout) catch |err| {
-                std.debug.panic("[KqueuePoller] error during kevent syscall removing handler: {any}", .{err});
-            };
+            const e = keventSyscall(self.kqfd, &[_]std.posix.Kevent{kevent}, &.{}, &ctrl_timeout);
             if (e == -1) {
                 std.debug.panic("[KqueuePoller] failed to delete new event", .{});
             }
@@ -178,9 +198,7 @@ pub const KqueuePoller = struct {
         var events: [max_events]std.posix.Kevent = undefined;
 
         while (!self.shutdown_signal.load(std.builtin.AtomicOrder.unordered)) {
-            const num_events = std.posix.kevent(self.kqfd, &.{}, &events, &timeout) catch |err| {
-                std.debug.panic("[KqueuePoller] error during kevent syscall waiting on events: {any}", .{err});
-            };
+            const num_events = keventSyscall(self.kqfd, &.{}, &events, &timeout);
 
             // check err
             if (num_events == -1) {
@@ -188,15 +206,15 @@ pub const KqueuePoller = struct {
             } else if (num_events == 0) {
                 // do nothing, we just timed out
             } else {
-                for (0..num_events) |idx| {
+                for (0..@intCast(num_events)) |idx| {
                     const event = events[idx];
                     const pair = KqueuePair{
                         .ident = event.ident,
                         .filter = event.filter,
                     };
 
-                    self.handlers_guard.lockShared();
-                    defer self.handlers_guard.unlockShared();
+                    self.handlers_guard.lockShared(self.io) catch unreachable;
+                    defer self.handlers_guard.unlockShared(self.io);
                     const handler = self.handlers.getPtr(pair) orelse unreachable;
                     var self_handle = KqueuePollerHandle{
                         .poller = self,
@@ -215,25 +233,33 @@ fn test_handler(poller: *KqueuePollerHandle, kevent: std.posix.Kevent, ctx: ?*an
 }
 
 test "expect to be able to construct and deconstruct a KqueuePoller" {
-    var poller = KqueuePoller.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var poller = KqueuePoller.init(std.testing.allocator, threaded.io());
     defer poller.deinit();
 }
 
 test "expect to be able to spawn a KqueuePoller" {
-    var poller = KqueuePoller.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var poller = KqueuePoller.init(std.testing.allocator, threaded.io());
     defer poller.deinit();
     poller.spawn();
 }
 
 test "expect to be able to join a spawned KqueuePoller" {
-    var poller = KqueuePoller.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var poller = KqueuePoller.init(std.testing.allocator, threaded.io());
     poller.spawn();
     poller.join();
     defer poller.deinit();
 }
 
 test "expect to be able to add a Handler to a KqueuePoller" {
-    var poller = KqueuePoller.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var poller = KqueuePoller.init(std.testing.allocator, threaded.io());
     defer poller.deinit();
 
     const pair = KqueuePair{
@@ -246,7 +272,9 @@ test "expect to be able to add a Handler to a KqueuePoller" {
 }
 
 test "expect to be able to remove a Handler from a KqueuePoller" {
-    var poller = KqueuePoller.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var poller = KqueuePoller.init(std.testing.allocator, threaded.io());
     defer poller.deinit();
 
     const pair = KqueuePair{
@@ -260,7 +288,9 @@ test "expect to be able to remove a Handler from a KqueuePoller" {
 }
 
 test "expect to be able to spawn a KqueuePoller with a Handler" {
-    var poller = KqueuePoller.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var poller = KqueuePoller.init(std.testing.allocator, threaded.io());
     defer poller.deinit();
 
     const pair = KqueuePair{
@@ -274,7 +304,9 @@ test "expect to be able to spawn a KqueuePoller with a Handler" {
 }
 
 test "expect to be able to add a Handler after KqueuePoller has been spawned" {
-    var poller = KqueuePoller.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var poller = KqueuePoller.init(std.testing.allocator, threaded.io());
     defer poller.deinit();
 
     const pair = KqueuePair{

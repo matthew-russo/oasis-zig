@@ -20,6 +20,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        // Zig 0.16 removed the low-level socket/event wrappers from `std.posix`;
+        // the networking layer now calls the libc bindings in `std.c` directly.
+        .link_libc = true,
     });
 
     const lib = b.addLibrary(.{

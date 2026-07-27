@@ -81,7 +81,7 @@ pub const DebugFormatter = struct {
             .optional => "TODO: type: optional", // Optional
             .error_union => "TODO: type: error_union", // ErrorUnion
             .error_set => "TODO: type: error_set", // ErrorSet
-            .@"enum" => |_| {
+            .@"enum" => {
                 try ctx.buffer.appendSlice(ctx.allocator, @typeName(@TypeOf(t)));
                 try ctx.buffer.appendSlice(ctx.allocator, ".");
                 try ctx.buffer.appendSlice(ctx.allocator, @tagName(t));

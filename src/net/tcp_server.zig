@@ -4,6 +4,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const collections = @import("../collections/mod.zig");
+const sys = @import("sys.zig");
+const Address = @import("address.zig").Address;
 
 const epoll = switch (builtin.os.tag) {
     .linux => @import("../os/epoll.zig"),
@@ -95,7 +97,7 @@ pub const TcpServerContext = struct {
     handler: TcpConnectionHandler,
 
     // The address that the TcpServer is bound to
-    address: std.net.Address,
+    address: Address,
 
     // The current active connections, keyed by their file descriptor
     conns: std.AutoHashMap(usize, TcpConnection),
@@ -110,7 +112,7 @@ pub const KqueueTcpServer = struct {
 
     ctx: *TcpServerContext,
 
-    pub fn init(allocator: Allocator, address: std.net.Address, handler: TcpConnectionHandler) Self {
+    pub fn init(allocator: Allocator, io: std.Io, address: Address, handler: TcpConnectionHandler) Self {
         const ctx = allocator.create(TcpServerContext) catch unreachable;
         ctx.* = TcpServerContext{
             .allocator = allocator,
@@ -120,7 +122,7 @@ pub const KqueueTcpServer = struct {
         };
         return Self{
             .allocator = allocator,
-            .kqueue = kqueue.KqueuePoller.init(allocator),
+            .kqueue = kqueue.KqueuePoller.init(allocator, io),
             .ctx = ctx,
         };
     }
@@ -139,15 +141,15 @@ pub const KqueueTcpServer = struct {
     }
 
     pub fn serve(self: *Self) !void {
-        const sock_flags: u32 = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
-        const sockfd: std.posix.socket_t = try std.posix.socket(std.os.linux.AF.INET, sock_flags, std.posix.IPPROTO.TCP);
+        const sockfd = try sys.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
+        try sys.setCloexecNonblock(sockfd);
 
         const max_conns: u31 = 128;
 
         var socklen: std.posix.socklen_t = self.ctx.address.getOsSockLen();
-        try std.posix.bind(sockfd, &self.ctx.address.any, socklen);
-        try std.posix.listen(sockfd, max_conns);
-        try std.posix.getsockname(sockfd, &self.ctx.address.any, &socklen);
+        try sys.bind(sockfd, &self.ctx.address.any, socklen);
+        try sys.listen(sockfd, max_conns);
+        try sys.getsockname(sockfd, &self.ctx.address.any, &socklen);
 
         const pair = kqueue.KqueuePair{
             .ident = @intCast(sockfd),
@@ -172,9 +174,9 @@ pub const KqueueTcpServer = struct {
         if (maybe_ctx) |ctx| {
             // std.debug.print("\n[Server] new connection!", .{});
             // a new conn is waiting to be accepted
-            var accepted_addr: std.net.Address = undefined;
+            var accepted_addr: Address = undefined;
             var addr_len = ctx.address.getOsSockLen();
-            if (std.posix.accept(@intCast(kevent.ident), &accepted_addr.any, &addr_len, std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK)) |new_conn_sock| {
+            if (sys.accept(@intCast(kevent.ident), &accepted_addr.any, &addr_len)) |new_conn_sock| {
                 const conn = TcpConnection.init(ctx.allocator, ctx.handler);
 
                 const read_pair = kqueue.KqueuePair{
@@ -216,7 +218,7 @@ pub const KqueueTcpServer = struct {
             // an existing conn has some data available
             if (ctx.conns.getPtr(kevent.ident)) |conn| {
                 if (kevent.flags == std.c.EV.EOF) {
-                    std.posix.close(@intCast(kevent.ident));
+                    sys.close(@intCast(kevent.ident));
                     return;
                 }
 
@@ -224,11 +226,11 @@ pub const KqueueTcpServer = struct {
                 var amount_read: usize = 0;
 
                 while (amount_read < kevent.data) {
-                    if (std.posix.read(@intCast(kevent.ident), read_buf[0..])) |bytes_read| {
+                    if (sys.read(@intCast(kevent.ident), read_buf[0..])) |bytes_read| {
                         amount_read += bytes_read;
                         _ = conn.read_buffer.append(read_buf[0..amount_read]) catch unreachable;
                     } else |err| {
-                        if (err == std.posix.ReadError.WouldBlock) {
+                        if (err == sys.ReadError.WouldBlock) {
                             std.debug.panic("\n[Server::handleReadableDataSocket] sockfd({any}) return EAGAIN", .{kevent.ident});
                         } else {
                             std.debug.panic("\n[Server::handleReadableDataSocket] sockfd({any}) returned unexpected err: {any}", .{ kevent.ident, err });
@@ -237,7 +239,7 @@ pub const KqueueTcpServer = struct {
                 }
 
                 if (amount_read == 0) {
-                    std.posix.close(@intCast(kevent.ident));
+                    sys.close(@intCast(kevent.ident));
                     // TODO [matthew-russo 08-23-24] does this need to be removed from the kqueue?
                     return;
                 }
@@ -246,7 +248,7 @@ pub const KqueueTcpServer = struct {
 
                 while (conn.write_buffer.getSlice(std.math.maxInt(usize))) |slice| {
                     // std.debug.print("[Server::handleReadableDataSocket] writing bytes out: {any}", .{slice});
-                    _ = std.posix.write(@intCast(kevent.ident), slice) catch unreachable;
+                    _ = sys.write(@intCast(kevent.ident), slice) catch unreachable;
                 }
             }
         } else {
@@ -284,7 +286,7 @@ pub const EpollTcpServer = struct {
 
     ctx: *TcpServerContext,
 
-    pub fn init(allocator: Allocator, address: std.net.Address, handler: TcpConnectionHandler) Self {
+    pub fn init(allocator: Allocator, address: Address, handler: TcpConnectionHandler) Self {
         const ctx = allocator.create(TcpServerContext) catch unreachable;
         ctx.* = TcpServerContext{
             .allocator = allocator,
@@ -313,15 +315,15 @@ pub const EpollTcpServer = struct {
     }
 
     pub fn serve(self: *Self) !void {
-        const sock_flags: u32 = std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK;
-        const sockfd: std.posix.socket_t = try std.posix.socket(std.os.linux.AF.INET, sock_flags, std.posix.IPPROTO.TCP);
+        const sockfd = try sys.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
+        try sys.setCloexecNonblock(sockfd);
 
         const max_conns: u31 = 128;
 
         var socklen: std.posix.socklen_t = self.ctx.address.getOsSockLen();
-        try std.posix.bind(sockfd, &self.ctx.address.any, socklen);
-        try std.posix.listen(sockfd, max_conns);
-        try std.posix.getsockname(sockfd, &self.ctx.address.any, &socklen);
+        try sys.bind(sockfd, &self.ctx.address.any, socklen);
+        try sys.listen(sockfd, max_conns);
+        try sys.getsockname(sockfd, &self.ctx.address.any, &socklen);
 
         const handler = epoll.EpollHandler.init(self.ctx, Self.handleAcceptSocket);
         try self.epoller.addHandler(sockfd, std.os.linux.EPOLL.IN, handler);
@@ -342,9 +344,9 @@ pub const EpollTcpServer = struct {
         if (maybe_ctx) |ctx| {
             // std.debug.print("\n[Server] new connection!", .{});
             // a new conn is waiting to be accepted
-            var accepted_addr: std.net.Address = undefined;
+            var accepted_addr: Address = undefined;
             var addr_len = ctx.address.getOsSockLen();
-            if (std.posix.accept(event.data.fd, &accepted_addr.any, &addr_len, std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK)) |new_conn_sock| {
+            if (sys.accept(event.data.fd, &accepted_addr.any, &addr_len)) |new_conn_sock| {
                 const conn = TcpConnection.init(ctx.allocator, ctx.handler);
 
                 const read_handler = epoll.EpollHandler.init(ctx, Self.handleReadableDataSocket);
@@ -381,14 +383,14 @@ pub const EpollTcpServer = struct {
                 var amount_read: usize = 0;
 
                 while (true) {
-                    if (std.posix.read(@intCast(event.data.fd), read_buf[0..])) |bytes_read| {
+                    if (sys.read(@intCast(event.data.fd), read_buf[0..])) |bytes_read| {
                         if (bytes_read == 0) {
                             break;
                         }
                         amount_read += bytes_read;
                         _ = conn.read_buffer.append(read_buf[0..amount_read]) catch unreachable;
                     } else |err| {
-                        if (err == std.posix.ReadError.WouldBlock) {
+                        if (err == sys.ReadError.WouldBlock) {
                             std.debug.panic("\n[Server::handleReadableDataSocket] sockfd({any}) return EAGAIN", .{event.data.fd});
                         } else {
                             std.debug.panic("\n[Server::handleReadableDataSocket] sockfd({any}) returned unexpected err: {any}", .{ event.data.fd, err });
@@ -398,7 +400,7 @@ pub const EpollTcpServer = struct {
 
                 if (amount_read == 0) {
                     // read() returning 0 is EOF
-                    std.posix.close(@intCast(event.data.fd));
+                    sys.close(@intCast(event.data.fd));
                     // TODO [matthew-russo 08-23-24] does this need to be removed from epoll?
                     return;
                 }
@@ -407,7 +409,7 @@ pub const EpollTcpServer = struct {
 
                 while (conn.write_buffer.getSlice(std.math.maxInt(usize))) |slice| {
                     // std.debug.print("[Server::handleReadableDataSocket] writing bytes out: {any}", .{slice});
-                    _ = std.posix.write(@intCast(event.data.fd), slice) catch unreachable;
+                    _ = sys.write(@intCast(event.data.fd), slice) catch unreachable;
                 }
             }
         } else {
