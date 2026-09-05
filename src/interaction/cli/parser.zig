@@ -550,39 +550,12 @@ pub const CommandParser = struct {
         }
 
         if (maybe_target_command_def) |target_command_def| {
-            // 1. chomp all arguments
-            while (true) {
-                var arg_parser = ArgParser.init(
-                    self.offset,
-                    self.cli_args,
-                    target_command_def.possible_args.items,
-                );
-                const maybe_arg = try arg_parser.parse();
-
-                if (maybe_arg) |arg| {
-                    args.append(self.allocator, arg) catch unreachable;
-                } else {
-                    break;
-                }
-            }
-
-            // 2. make sure all required arguments have been populated. if not, return
-            // an error
-            for (target_command_def.possible_args.items) |possible_arg| {
-                if (possible_arg.required) {
-                    var found = false;
-                    for (args.items) |arg| {
-                        if (possible_arg.matchesArgName(arg.name)) {
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    if (!found) {
-                        return CliParsingError.MissingRequiredArgument;
-                    }
-                }
-            }
+            args = try parseArgs(
+                self.allocator,
+                self.offset,
+                self.cli_args,
+                target_command_def.possible_args.items,
+            );
 
             // 3. chomp subcommand if available
             var subcommand_parser = CommandParser.init(
@@ -617,6 +590,44 @@ pub const CommandParser = struct {
         }
     }
 };
+
+fn parseArgs(
+    allocator: std.mem.Allocator,
+    offset: *usize,
+    cli_args: [][]const u8,
+    valid_args: []ArgDefinition,
+) CliParsingError!std.ArrayList(Arg) {
+    var args = std.ArrayList(Arg).empty;
+
+    while (true) {
+        var arg_parser = ArgParser.init(offset, cli_args, valid_args);
+        const maybe_arg = try arg_parser.parse();
+
+        if (maybe_arg) |arg| {
+            args.append(allocator, arg) catch unreachable;
+        } else {
+            break;
+        }
+    }
+
+    for (valid_args) |possible_arg| {
+        if (possible_arg.required) {
+            var found = false;
+            for (args.items) |arg| {
+                if (possible_arg.matchesArgName(arg.name)) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                return CliParsingError.MissingRequiredArgument;
+            }
+        }
+    }
+
+    return args;
+}
 
 pub const CliApp = struct {
     const Self = @This();
@@ -706,22 +717,46 @@ pub const CliApp = struct {
     /// without any modifications
     ///
     pub fn parse(self: *Self, allocator: std.mem.Allocator, argc: usize, argv: [][]const u8) CliParsingError!Command {
-        std.debug.assert(self.possible_commands.items.len != 0);
-
         // first arg is always the program name
-        if (argc == 1) {
-            return CliParsingError.MissingCommand;
+        std.debug.assert(argc >= 1);
+        const cli_args = argv[1..];
+        const args = try parseArgs(
+            allocator,
+            &self.offset,
+            cli_args,
+            self.possible_args.items,
+        );
+
+        var command = Command{
+            .allocator = allocator,
+            .name = self.name,
+            .args = args,
+            .subcommand = null,
+        };
+
+        if (self.offset < cli_args.len) {
+            if (self.possible_commands.items.len == 0) {
+                return CliParsingError.UnknownCommand;
+            }
+
+            var parser = CommandParser.init(
+                allocator,
+                &self.offset,
+                cli_args,
+                self.possible_commands.items,
+            );
+            const subcommand = try parser.parse(allocator);
+            if (subcommand) |parsed_subcommand| {
+                if (command.args.items.len == 0) {
+                    return parsed_subcommand;
+                }
+                const subcommand_ptr = allocator.create(Command) catch unreachable;
+                subcommand_ptr.* = parsed_subcommand;
+                command.subcommand = subcommand_ptr;
+            }
         }
 
-        var parser = CommandParser.init(allocator, &self.offset, argv[1..], self.possible_commands.items);
-
-        const maybe_subcommand = try parser.parse(allocator);
-
-        if (maybe_subcommand) |subcommand| {
-            return subcommand;
-        } else {
-            return CliParsingError.MissingCommand;
-        }
+        return command;
     }
 };
 
@@ -1453,6 +1488,30 @@ test "cli_app_disallows_duplicate_args" {
         .build();
     // zig fmt: on
     try std.testing.expectEqual(err, CliDefinitionError.DuplicateArgumentDefined);
+}
+
+test "cli_app_parses_root_args_without_command" {
+    // zig fmt: off
+    var cli_parser = try CliAppBuilder.init(std.testing.allocator, "my_binary", "a server").withArg(
+        try ArgDefinitionBuilder.init()
+            .withLongName("arg")
+            .withHelp("server argument")
+            .withType(CliType.string)
+            .isRequired(true)
+            .build(),
+    ).build();
+    // zig fmt: on
+    defer cli_parser.deinit();
+
+    var argv: [3][]const u8 = [_][]const u8{ "my_binary", "--arg", "value" };
+    var command = try cli_parser.parse(std.testing.allocator, argv.len, &argv);
+    defer command.deinit();
+
+    try std.testing.expectEqualStrings(command.name, "my_binary");
+    try std.testing.expectEqual(command.args.items.len, 1);
+    try std.testing.expectEqualStrings(command.args.items[0].name.long.name, "arg");
+    try std.testing.expectEqualStrings(command.args.items[0].value.string, "value");
+    try std.testing.expectEqual(command.subcommand, null);
 }
 
 // ============================= End-to-end Tests ==============================
