@@ -17,17 +17,34 @@ pub const CliParsingError = error{
 };
 
 pub const CliType = enum {
+    const Self = @This();
+
     u64,
     i64,
     bool,
     string,
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("{s}", .{@tagName(self)});
+    }
 };
 
 pub const CliValue = union(enum) {
+    const Self = @This();
+
     u64: u64,
     i64: i64,
     bool: bool,
     string: []const u8,
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        switch (self) {
+            .u64 => |value| try writer.print("u64({d})", .{value}),
+            .i64 => |value| try writer.print("i64({d})", .{value}),
+            .bool => |value| try writer.print("bool({})", .{value}),
+            .string => |value| try writer.print("string('{s}')", .{value}),
+        }
+    }
 };
 
 pub const CliShortName = struct {
@@ -37,6 +54,10 @@ pub const CliShortName = struct {
 
     pub fn eq(self: *Self, other: *Self) bool {
         return std.mem.eql(u8, self.name, other.name);
+    }
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("-{s}", .{self.name});
     }
 };
 
@@ -48,11 +69,24 @@ pub const CliLongName = struct {
     pub fn eq(self: *Self, other: *Self) bool {
         return std.mem.eql(u8, self.name, other.name);
     }
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("--{s}", .{self.name});
+    }
 };
 
 pub const CliArgName = union(enum) {
+    const Self = @This();
+
     short: CliShortName,
     long: CliLongName,
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        switch (self) {
+            .short => |name| try writer.print("{f}", .{name}),
+            .long => |name| try writer.print("{f}", .{name}),
+        }
+    }
 };
 
 pub const Arg = struct {
@@ -60,6 +94,10 @@ pub const Arg = struct {
 
     name: CliArgName,
     value: CliValue,
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("Arg{{ .name={f}, .value={f} }}", .{ self.name, self.value });
+    }
 };
 
 pub const ArgDefinition = struct {
@@ -70,6 +108,16 @@ pub const ArgDefinition = struct {
     help: []const u8,
     ty: CliType,
     required: bool,
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("ArgDefinition{{ .long_name='{s}', .short_name=", .{self.long_name});
+        if (self.short_name) |short_name| {
+            try writer.print("'{s}'", .{short_name});
+        } else {
+            try writer.print("null", .{});
+        }
+        try writer.print(", .help='{s}', .ty={f}, .required={} }}", .{ self.help, self.ty, self.required });
+    }
 
     pub fn matchesArgName(self: *const Self, argName: CliArgName) bool {
         switch (argName) {
@@ -208,6 +256,21 @@ pub const Command = struct {
     args: std.ArrayList(Arg),
     subcommand: ?*Command,
 
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("Command{{ .name='{s}', .args=[", .{self.name});
+        for (self.args.items, 0..) |arg, index| {
+            if (index != 0) try writer.print(", ", .{});
+            try writer.print("{f}", .{arg});
+        }
+        try writer.print("], .subcommand=", .{});
+        if (self.subcommand) |subcommand| {
+            try writer.print("{f}", .{subcommand.*});
+        } else {
+            try writer.print("null", .{});
+        }
+        try writer.print(" }}", .{});
+    }
+
     pub fn deinit(s: *Self) void {
         var self = s;
 
@@ -229,6 +292,20 @@ pub const CommandDefinition = struct {
     help: []const u8,
     possible_args: std.ArrayList(ArgDefinition),
     possible_subcommands: std.ArrayList(CommandDefinition),
+
+    pub fn format(self: Self, writer: *std.Io.Writer) !void {
+        try writer.print("CommandDefinition{{ .name='{s}', .help='{s}', .possible_args=[", .{ self.name, self.help });
+        for (self.possible_args.items, 0..) |arg, index| {
+            if (index != 0) try writer.print(", ", .{});
+            try writer.print("{f}", .{arg});
+        }
+        try writer.print("], .possible_subcommands=[", .{});
+        for (self.possible_subcommands.items, 0..) |subcommand, index| {
+            if (index != 0) try writer.print(", ", .{});
+            try writer.print("{f}", .{subcommand});
+        }
+        try writer.print("] }}", .{});
+    }
 
     pub fn deinit(s: *Self) void {
         var self = s;
