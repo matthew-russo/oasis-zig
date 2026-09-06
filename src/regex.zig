@@ -4,27 +4,81 @@
 
 const std = @import("std");
 
+const EMPTY_SLICE: []const u8 = "";
+
+// CaptureRef represents a single capture group's start position and length in the input string
+pub const CaptureRef = struct {
+    const Self = @This();
+
+    start: usize,
+    len: usize,
+
+    pub fn get_slice(self: Self, input: []const u8) []const u8 {
+        if (self.len == 0) return EMPTY_SLICE;
+        return input[self.start .. self.start + self.len];
+    }
+};
+
+// Snapshot represents a complete state of a regex match attempt, containing
+// the cursor position and all capture group metadata at that point
+pub const Snapshot = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    current: usize,
+    refs: []CaptureRef,
+
+    pub fn init(allocator: std.mem.Allocator, current: usize, refs: []const CaptureRef) !Self {
+        const owned_refs = try allocator.alloc(CaptureRef, refs.len);
+        std.mem.copyForwards(CaptureRef, owned_refs, refs);
+        return Self{
+            .allocator = allocator,
+            .current = current,
+            .refs = owned_refs,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.refs);
+    }
+};
+
 // Cursor's represent the current state of a regex match attempt, containing the input string, the current position in the string,
 // and any capture groups that have been matched so far.
 pub const RegexCursor = struct {
     const Self = @This();
 
+    allocator: std.mem.Allocator,
     input: []const u8,
     current: usize,
-    capture_groups: [][]const u8,
+    captures: []CaptureRef,
 
-    pub fn init(input: []const u8, current: usize, capture_groups: [][]const u8) Self {
+    pub fn init(allocator: std.mem.Allocator, input: []const u8, current: usize, num_captures: usize) !Self {
+        const captures = try allocator.alloc(CaptureRef, num_captures);
+        for (captures) |*cap| {
+            cap.* = CaptureRef{ .start = 0, .len = 0 };
+        }
         return Self{
+            .allocator = allocator,
             .input = input,
             .current = current,
-            .capture_groups = capture_groups,
+            .captures = captures,
         };
     }
 
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.captures);
+    }
+
+    pub fn get_capture(self: Self, idx: usize) []const u8 {
+        return self.captures[idx].get_slice(self.input);
+    }
+
     pub fn format(self: Self, writer: *std.Io.Writer) !void {
-        try writer.print("RegexCursor{{ .input='{s}', .current={d}, .capture_groups=[", .{ self.input, self.current });
-        for (self.capture_groups, 0..) |capture_group, idx| {
-            try writer.print("{d}: '{s}', ", .{ idx, capture_group });
+        try writer.print("RegexCursor{{ .input='{s}', .current={d}, .captures=[", .{ self.input, self.current });
+        for (self.captures, 0..) |capture, idx| {
+            const slice = capture.get_slice(self.input);
+            try writer.print("{d}: '{s}'(@{d}), ", .{ idx, slice, capture.start });
         }
         try writer.print("] }}", .{});
     }
@@ -468,7 +522,7 @@ fn parse_tokens(allocator: std.mem.Allocator, tokens: RegexTokens) !Regex {
     return Regex{
         .allocator = allocator,
         .root = root,
-        .capture_group_buffer = try allocator.alloc([]const u8, capture_group_idx - 1),
+        .num_captures = capture_group_idx - 1,
     };
 }
 
@@ -530,19 +584,27 @@ fn match_single_node(allocator: std.mem.Allocator, node: *const RegexNode, curso
             const alternation_matches = match_alternation(allocator, cg.node, cursor);
             if (!alternation_matches) return false;
             const capture_end = cursor.current;
+            const capture_len = capture_end - capture_start;
+
             std.log.debug("Capture group {d} matched from {d} to {d}, cursor: {f}", .{ cg.idx, capture_start, capture_end, cursor });
-            std.log.debug("Successfully matched capture group {d}={s}, current cursor: {f}", .{ cg.idx, cursor.input[capture_start..capture_end], cursor });
-            cursor.capture_groups[cg.idx - 1] = cursor.input[capture_start..capture_end];
+            std.log.debug("Successfully matched capture group {d}='{s}', current cursor: {f}", .{ cg.idx, cursor.input[capture_start..capture_end], cursor });
+
+            cursor.captures[cg.idx - 1] = CaptureRef{ .start = capture_start, .len = capture_len };
+
+            const slice = cursor.get_capture(cg.idx - 1);
+            std.log.debug("Recorded capture group {d}: start={d} len={d} slice='{s}'", .{ cg.idx, capture_start, capture_len, slice });
             return true;
         },
         .backreference => |cg_idx| {
             std.log.debug("Attempting to match backreference to capture group {d}, {f}", .{ cg_idx, cursor });
+            const cap_slice = cursor.get_capture(cg_idx - 1);
+            std.log.debug("Backreference {d} captured slice before match: '{s}' (len={d}), cursor.current={d}", .{ cg_idx, cap_slice, cap_slice.len, cursor.current });
             // for backreferences, we construct a sequence of literal nodes on the fly using the string that was previously matched
-            const captured = cursor.capture_groups[cg_idx - 1];
-            for (captured) |c| {
+            for (cap_slice) |c| {
                 const inline_node = RegexNode{ .literal = c };
                 if (!match_single_node(allocator, &inline_node, cursor)) return false;
             }
+            std.log.debug("Backreference {d} matched successfully, new cursor.current={d}", .{ cg_idx, cursor.current });
             return true;
         },
         else => std.debug.panic("Invalid Node passed to `match_single_node`: {f}", .{node}),
@@ -560,7 +622,23 @@ fn match_alternation(allocator: std.mem.Allocator, alternation: RegexAlternation
     return false;
 }
 
+var rng = std.Random.DefaultPrng.init(0);
 fn match_nodes(allocator: std.mem.Allocator, nodes: []const *RegexNode, idx: usize, cursor: *RegexCursor) bool {
+    const id = rng.random().int(u64);
+    const RegexNodes = struct {
+        const Self = @This();
+
+        nodes: []const *RegexNode,
+
+        pub fn format(self: Self, writer: *std.Io.Writer) !void {
+            try writer.print("RegexNodes([", .{});
+            for (self.nodes) |node| {
+                try writer.print("{f}, ", .{node});
+            }
+            try writer.print("])", .{});
+        }
+    };
+    std.log.debug("[{d}] Attempting to match nodes starting at idx={d}: {f} against {f}", .{ id, idx, RegexNodes{ .nodes = nodes }, cursor });
     const n = nodes.len;
     if (idx >= n) return true;
 
@@ -568,55 +646,115 @@ fn match_nodes(allocator: std.mem.Allocator, nodes: []const *RegexNode, idx: usi
     switch (node.*) {
         .quantified => |q| {
             const start_pos = cursor.current;
-            var positions = std.ArrayList(usize).empty;
-            defer positions.deinit(allocator);
+            var initial_snapshot = Snapshot.init(allocator, cursor.current, cursor.captures) catch unreachable;
+            defer initial_snapshot.deinit();
 
-            // greedy matches need to backtrack. for example, with the following pattern `ca+ats` and the input `caaats`,
-            // matching `a+` would naively eat all 3 `a`'s, however then we're left without any remaining `a`'s to match.
-            // to handle this, we first match as many of the quantifier nodes as possible, recording the position of each
-            // pattern we match.
-            //
-            // with all match positions in hand, we then walk backwards through them, attempting to match the rest of the
-            // nodes. we prioritize the longest match and if we walk too far back such that we don't satisfy our minimum
-            // amount, we break out.
+            var snapshots = std.ArrayList(Snapshot).empty;
+            defer {
+                for (snapshots.items) |*snap| {
+                    snap.deinit();
+                }
+                snapshots.deinit(allocator);
+            }
 
             var count: usize = 0;
             while (true) {
                 if (q.quantifier.max) |max| if (count >= max) break;
                 const before = cursor.current;
+                std.log.debug("[{d}] Quantifier matching iteration, count={d}, cursor={f}", .{ id, count, cursor });
                 if (!match_single_node(allocator, q.node, cursor)) break;
                 if (cursor.current == before) break; // avoid infinite loop on zero-width
-                positions.append(allocator, cursor.current) catch unreachable;
+
+                // Take a snapshot of the current state
+                const snapshot = Snapshot.init(allocator, cursor.current, cursor.captures) catch unreachable;
+                std.log.debug("[{d}] Taking snapshot at pos={d}, count={d}", .{ id, cursor.current, count });
+
+                // Log captures for debugging
+                for (cursor.captures, 0..) |cap, i| {
+                    const slice = cap.get_slice(cursor.input);
+                    std.log.debug("[{d}] snapshot capture[{d}] start={d} len={d} slice='{s}'", .{ id, i, cap.start, cap.len, slice });
+                }
+
+                snapshots.append(allocator, snapshot) catch unreachable;
                 count += 1;
             }
 
             if (q.quantifier.greedy) {
-                var k: usize = positions.items.len;
+                var k: usize = snapshots.items.len;
                 while (true) {
                     if (k < q.quantifier.min) break;
+
                     if (k == 0) {
                         cursor.current = start_pos;
+                        std.mem.copyForwards(CaptureRef, cursor.captures, initial_snapshot.refs);
+                        std.log.debug("[{d}] Restored initial state for k=0: {f}", .{ id, cursor });
                     } else {
-                        cursor.current = positions.items[k - 1];
+                        const snap = snapshots.items[k - 1];
+                        cursor.current = snap.current;
+                        std.mem.copyForwards(CaptureRef, cursor.captures, snap.refs);
+                        std.log.debug("[{d}] Restored snapshot k={d}, cursor: {f}", .{ id, k, cursor });
                     }
-                    if (match_nodes(allocator, nodes, idx + 1, cursor)) return true;
+
+                    // Log current state for debugging
+                    for (cursor.captures, 0..) |cap, i| {
+                        const slice = cap.get_slice(cursor.input);
+                        std.log.debug("[{d}] after restore (greedy) k={d} capture[{d}] start={d} len={d} slice='{s}'", .{ id, k, i, cap.start, cap.len, slice });
+                    }
+
+                    // Try to match the rest with current state
+                    const next_char_slice: []const u8 = if (cursor.current < cursor.input.len)
+                        cursor.input[cursor.current .. cursor.current + 1]
+                    else
+                        EMPTY_SLICE;
+                    if (cursor.captures.len >= 4) {
+                        const c4 = cursor.captures[3];
+                        const c4_slice = c4.get_slice(cursor.input);
+                        std.log.debug("[{d}] greedy-backtrack try k={d} capture4 start={d} len={d} slice='{s}' next='{s}'", .{ id, k, c4.start, c4.len, c4_slice, next_char_slice });
+                    } else {
+                        std.log.debug("[{d}] greedy-backtrack try k={d} num_captures={d} next='{s}'", .{ id, k, cursor.captures.len, next_char_slice });
+                    }
+
+                    // Preview next node and remaining input
+                    if (idx + 1 < nodes.len) {
+                        const next_node = nodes[idx + 1];
+                        const preview_end = if (cursor.current + 8 < cursor.input.len) cursor.current + 8 else cursor.input.len;
+                        const preview = if (cursor.current < cursor.input.len) cursor.input[cursor.current..preview_end] else EMPTY_SLICE;
+                        std.log.debug("[{d}] Next node to attempt: {f}, input preview='{s}'", .{ id, next_node, preview });
+                    } else {
+                        std.log.debug("[{d}] No next node to attempt (idx+1 >= nodes.len)", .{id});
+                    }
+
+                    const try_result = match_nodes(allocator, nodes, idx + 1, cursor);
+                    std.log.debug("[{d}] match_nodes returned {} after greedy quantifier k={d}, cursor: {f}", .{ id, try_result, k, cursor });
+                    if (try_result) return true;
+
                     if (k == 0) break;
                     k -= 1;
                 }
             } else {
                 var k: usize = q.quantifier.min;
-                while (k <= positions.items.len) {
+                while (k <= snapshots.items.len) {
                     if (k == 0) {
                         cursor.current = start_pos;
+                        std.mem.copyForwards(CaptureRef, cursor.captures, initial_snapshot.refs);
+                        std.log.debug("[{d}] Restored initial state for non-greedy k=0: {f}", .{ id, cursor });
                     } else {
-                        cursor.current = positions.items[k - 1];
+                        const snap = snapshots.items[k - 1];
+                        cursor.current = snap.current;
+                        std.mem.copyForwards(CaptureRef, cursor.captures, snap.refs);
+                        std.log.debug("[{d}] Restored snapshot for non-greedy k={d}: {f}", .{ id, k, cursor });
                     }
-                    if (match_nodes(allocator, nodes, idx + 1, cursor)) return true;
+
+                    const try_result = match_nodes(allocator, nodes, idx + 1, cursor);
+                    if (try_result) return true;
                     k += 1;
                 }
             }
 
+            // Restore initial state before failing
             cursor.current = start_pos;
+            std.mem.copyForwards(CaptureRef, cursor.captures, initial_snapshot.refs);
+            std.log.debug("[{d}] Final restore before failing quantifier: {f}", .{ id, cursor });
             return false;
         },
         .alternation => |alternation| {
@@ -637,7 +775,7 @@ pub const Regex = struct {
 
     allocator: std.mem.Allocator,
     root: RegexAlternation,
-    capture_group_buffer: [][]const u8,
+    num_captures: usize,
 
     pub fn for_pattern(allocator: std.mem.Allocator, pattern: []const u8) !Self {
         const tokens = try tokenize(allocator, pattern);
@@ -650,7 +788,8 @@ pub const Regex = struct {
         std.log.debug("Attempting to match input '{s}' against regex {f}", .{ input, self });
         var i: usize = 0;
         while (i <= input.len) {
-            var cursor = RegexCursor.init(input, i, self.capture_group_buffer);
+            var cursor = RegexCursor.init(self.allocator, input, i, self.num_captures) catch unreachable;
+            defer cursor.deinit();
             if (match_alternation(self.allocator, self.root, &cursor)) return true;
             i += 1;
         }
@@ -663,12 +802,11 @@ pub const Regex = struct {
 
     pub fn deinit(self: *const Self) void {
         self.root.deinit(self.allocator);
-        self.allocator.free(self.capture_group_buffer);
     }
 };
 
 fn test_regex(pattern: []const u8, input: []const u8, expect_matches: bool) !void {
-    std.testing.log_level = .err;
+    std.testing.log_level = .debug;
 
     const allocator = std.testing.allocator;
     const tokens = try tokenize(allocator, pattern);
@@ -1186,4 +1324,8 @@ test "regex '((cat) and \\2) is the same as \\1' matches 'cat and cat is the sam
 
 test "regex '^([act]+) is \\1, not [^xyz]+$' matches 'cat is cat, not dog'" {
     try test_regex("^([act]+) is \\1, not [^xyz]+$", "cat is cat, not dog", true);
+}
+
+test "regex '(([abc]+)-([def]+)) is \\1, not ([^xyz]+), \\2, or \\3' matches 'abc-def is abc-def, not efg, abc, or def'" {
+    try test_regex("(([abc]+)-([def]+)) is \\1, not ([^xyz]+), \\2, or \\3", "abc-def is abc-def, not efg, abc, or def", true);
 }
